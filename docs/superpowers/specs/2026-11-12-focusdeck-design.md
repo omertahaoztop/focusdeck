@@ -70,13 +70,13 @@ mesaj, stdin'den istek, stdout'tan cevap. stderr çekirdeğin log dosyasına yaz
 
 ```json
 {
-  "id": "45539",
-  "title": "TÜYAP için S3",
+  "id": "12345",
+  "title": "DEPO için S3",
   "subtitle": "Ö1 · 4g gecikmiş",
-  "url": "https://destek.mono.tr/issues/45539",
+  "url": "https://redmine.example.com/issues/12345",
   "due": "2026-11-08T17:00:00+03:00",
   "overdue": true,
-  "source": {"plugin": "redmine", "id": "45539"},
+  "source": {"plugin": "redmine", "id": "12345"},
   "description": null,
   "labels": [],
   "from": null,
@@ -85,7 +85,7 @@ mesaj, stdin'den istek, stdout'tan cevap. stderr çekirdeğin log dosyasına yaz
 ```
 
 - `source` öğenin asıl kaynağıdır ve yalnız başka kutudan gelmiş öğelerde bulunur. Vikunja plugin'i
-  bunu görev açıklamasına `focusdeck-source: redmine:45539` satırı olarak yazar ve geri okur.
+  bunu görev açıklamasına `focusdeck-source: redmine:12345` satırı olarak yazar ve geri okur.
 - `labels`, `from`, `description`, `links` dışarıdan not alırken dolar. Plugin bunları kendi
   karşılığına çevirir (Vikunja'da etiket, `kimden:<ad>` etiketi, açıklama, link paragrafı).
 - `drop` içindeki `from` hedef plugin ile aynıysa (Vikunja görevi başka Vikunja kutusuna) plugin
@@ -140,7 +140,7 @@ sha256 = "64 haneli onaltılık sağlama"
 ```toml
 name = "iş"
 capture_into = "sozlu"
-capture_refs = { R = "https://destek.mono.tr/issues/{}" }
+capture_refs = { R = "https://redmine.example.com/issues/{}" }
 capture_label_aliases = { tel = "telefon", yuz = "yuz-yuze", "yüz" = "yuz-yuze" }
 
 [[box]]
@@ -150,7 +150,7 @@ plugin = "vikunja"
 row = 0
 col = 0
 refresh = "1m"
-config = { url = "https://vikunja.omertahaoztop.tr", token_file = "~/.config/focusdeck/secrets/vikunja", project = "Mono" }
+config = { url = "https://vikunja.example.com", token_file = "~/.config/focusdeck/secrets/vikunja", project = "Home" }
 
 [[box]]
 id = "redmine"
@@ -159,7 +159,7 @@ plugin = "redmine"
 row = 0
 col = 1
 plan_into = "sozlu"
-config = { url = "https://destek.mono.tr", key_file = "~/.config/focusdeck/secrets/redmine" }
+config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/secrets/redmine" }
 ```
 
 `row`/`col` ızgara konumudur. İsteğe bağlı `width`/`height` kutuyu birden çok hücreye yayar.
@@ -213,7 +213,7 @@ Fare:
 | `zulip` | Yıldızlı mesajlar | `unstar` | Hayır | Hayır |
 | `whatsapp` | GOWA'da kendime sohbetinin mesajları | `done` (yalnız yerel gizleme) | Hayır | Hayır |
 
-- Fikirler kutusu `vikunja` plugin'inin başka bir projeyle çalışan ikinci örneğidir ("Mono Fikirler").
+- Fikirler kutusu `vikunja` plugin'inin başka bir projeyle çalışan ikinci örneğidir ("Home Ideas").
 - `gmail` ilk girişi `focusdeck-gmail login` alt komutuyla yapar. Bugünkü OAuth istemcisi ve token
   dosyası taşınır, yeniden giriş gerekmez.
 - `whatsapp` GOWA'ya yalnız `GET /chat/<jid>/messages` ile bağlanır. Gizlenen mesaj kimlikleri
@@ -230,7 +230,7 @@ Fare:
     `paz` ve ASCII yazımları) varsa o gün, geçmişse bir hafta sonra. Zaman son tarih ve hatırlatma olur.
   - İlk `@ad` kimden bilgisidir. `#kelime` etikettir, `capture_label_aliases` ile çevrilir,
     yalnız rakamdan oluşan `#123` düz metin kalır.
-  - `capture_refs` önekiyle başlayıp en az iki rakamla süren kelime (`R45539`) linke çevrilir.
+  - `capture_refs` önekiyle başlayıp en az iki rakamla süren kelime (`R12345`) linke çevrilir.
   - Geri kalan kelimeler başlıktır. Başlık boşsa not eklenmez, komut 1 ile çıkar.
 - Hedef profilin `capture_into` kutusudur. Plugin ulaşılamazsa not
   `~/.local/state/focusdeck/capture-queue.jsonl`'a yazılır, komut 1 ile çıkar, bir sonraki
@@ -250,7 +250,7 @@ Fare:
 
 - pve11 üzerinde yeni Debian 13 LXC (1 vCPU, 512 MB, 4 GB), GOWA sürüm ikilisi, systemd birimi,
   SQLite depo. Basic Auth zorunlu, webhook kapalı.
-- Dış erişim Caddy üzerinden `gowa.omertahaoztop.tr`: IP filtresi (`import ipfilter`) ve Basic Auth.
+- Dış erişim Caddy üzerinden `gowa.example.com`: IP filtresi (`import ipfilter`) ve Basic Auth.
   Vhost Caddy reposuna eklenir.
 - Eşleştirme QR ile, kullanıcının telefonundan. GOWA'dan mesaj gönderilmez.
 - Wiki `kisisel-sunucular` sayfasına yeni LXC satırı eklenir.

@@ -851,7 +851,7 @@ pub(crate) mod testkit {
             View::Full,
             vec![
                 item("t1", "birinci görev"),
-                linked("t2", "Tüyap hazırlığı", "redmine", "2"),
+                linked("t2", "Depo hazırlığı", "redmine", "2"),
                 item("t3", "üçüncü görev"),
             ],
         );
@@ -861,8 +861,8 @@ pub(crate) mod testkit {
             View::Full,
             vec![
                 with_url(item("1", "İstanbul sunucusu"), "https://destek/1"),
-                item("2", "TÜYAP hazırlığı"),
-                item("3", "ISPARTA kurulumu"),
+                item("2", "DEPO hazırlığı"),
+                item("3", "IŞIK kurulumu"),
             ],
         );
         list(
@@ -926,11 +926,11 @@ mod tests {
     fn search_is_turkish_case_insensitive() {
         let mut app = loaded_app();
         for (query, expected) in [
-            ("tüyap", "2"),
+            ("depo", "2"),
             ("istanbul", "1"),
-            ("ısparta", "3"),
+            ("ışık", "3"),
             ("İSTANBUL", "1"),
-            ("ISPARTA", "3"),
+            ("IŞIK", "3"),
         ] {
             app.mode = Mode::Search {
                 zoom: REDMINE,
@@ -947,7 +947,7 @@ mod tests {
         app.on_key(code(KeyCode::Enter));
         assert_eq!(app.mode, Mode::Zoom(REDMINE));
         app.on_key(key('/'));
-        for c in "tüy".chars() {
+        for c in "dep".chars() {
             app.on_key(key(c));
         }
         assert_eq!(ids(&app, REDMINE), vec!["2"]);

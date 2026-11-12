@@ -4,20 +4,20 @@
 
 Terminalde çalışan "bende bekleyen her şey" panosu. Sözlü verilen sözler, Redmine işleri, yıldızlı mailler ve mesajlar kaynak başına bir kutuda, tek ekranda durur. Kutuları ayrı programlar olan plugin'ler doldurur; fareyle taşınır, her an hangi tuşun ne yaptığı en alt satırda yazar.
 
-Linux x86_64 ve aarch64 hedeflenir.
+Linux x86_64 ve aarch64 hedeflenir. Arayüz İngilizce ve Türkçe gelir, yeni bir dil tek dosyadır (bkz. [Çeviri](#çeviri)).
 
-![Ana ekran: altı kutu, gecikmiş öğeler kırmızı](docs/screenshots/board.png)
+![Ana ekran: altı kutu, gecikmiş öğeler kırmızı](docs/screenshots/tr/board.png)
 
 | Büyütülmüş kutu | Taşıma | Tuş listesi |
 |---|---|---|
-| ![Büyütülmüş Redmine kutusu, planlananlar yıldızlı](docs/screenshots/zoom.png) | ![Hedef kutu seçimi](docs/screenshots/move.png) | ![? ile açılan tuş listesi](docs/screenshots/help.png) |
+| ![Büyütülmüş Redmine kutusu, planlananlar yıldızlı](docs/screenshots/tr/zoom.png) | ![Hedef kutu seçimi](docs/screenshots/tr/move.png) | ![? ile açılan tuş listesi](docs/screenshots/tr/help.png) |
 
 Görüntülerdeki veriler uydurmadır.
 
 ## Kurulum
 
 ```sh
-cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.1.0 --locked focusdeck
+cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.2.0 --locked focusdeck
 ```
 
 Hazır plugin'ler [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) reposunda. Dizinden kurulur:
@@ -37,11 +37,18 @@ Plugin'ler `~/.local/share/focusdeck/plugins/<ad>` altına yazılır. `install` 
 `~/.config/focusdeck/config.toml`, hepsi isteğe bağlı:
 
 ```toml
-default_profile = "iş"
+language = "tr"
+default_profile = "ev"
 registries = ["https://raw.githubusercontent.com/omertahaoztop/focusdeck-plugins/main/index.toml"]
 capture_command = ["rofi", "-dmenu", "-p", "Not"]
+
+[capture_words]
+tomorrow = ["yrn"]
+minute = ["dak"]
 ```
 
+- `language`: arayüz dili, `en` ya da `tr` gibi bir kod (bkz. [Çeviri](#çeviri)). Yoksa çekirdek sırayla `LC_ALL`, `LC_MESSAGES` ve `LANG` değişkenlerine bakar, hiçbiri yoksa İngilizceye düşer. Cron, systemd timer ya da pencere yöneticisi kısayolu `LANG` taşımayabilir; `capture` ya da `remind` bunlardan çalışıyorsa `language` yaz.
+- `capture_words`: `capture` komutunun anladığı kelimelere ek yazımlar; etkin dilin kendi kelimelerine eklenir. Her anahtar bir liste alır; anahtarlar `tomorrow`, `minute`, `hour`, `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun`, bilinmeyen anahtar hatadır.
 - `default_profile`: `--profile` ve `FOCUSDECK_PROFILE` verilmediğinde kullanılan profil.
 - `registries`: plugin dizini adresleri, sırayla. Aynı ad iki dizinde varsa öndeki kazanır. Kendi dizinini ya da fork'unu buraya ekleyebilirsin.
 - `capture_command`: `capture` metinsiz çağrılınca tek satır sormak için çalıştırılan komut.
@@ -51,7 +58,7 @@ capture_command = ["rofi", "-dmenu", "-p", "Not"]
 `~/.config/focusdeck/profiles/<ad>.toml`. Profil seçimi sırasıyla `--profile`, `FOCUSDECK_PROFILE`, `default_profile`.
 
 ```toml
-name = "iş"
+name = "ev"
 capture_into = "sozlu"
 capture_refs = { R = "https://redmine.example.com/issues/{}" }
 capture_label_aliases = { tel = "telefon", yuz = "yuz-yuze", "yüz" = "yuz-yuze" }
@@ -116,10 +123,19 @@ Metin verilmezse `capture_command` tek satır sorar. Not profildeki `capture_int
 Yazım kuralları:
 
 - `//` sonrası açıklamadır.
-- Başlığın son kelimesi `30dk` ya da `2s` ise şimdiden o kadar sonra, `SS:DD` ise bugün o saat (geçmişse yarın) son tarih ve hatırlatma olur. Önüne `yarın` ya da gün kısaltması (`pzt`, `sal`, `çar`, `per`, `cum`, `cmt`, `paz`) konabilir.
+- Başlığın son kelimesi `30dk` (dakika) ya da `2s` (saat) gibi birimli bir sayıysa şimdiden o kadar sonra, `SS:DD` ise bugün o saat (geçmişse yarın) son tarih ve hatırlatma olur. Önüne "yarın" kelimesi ya da bir gün kısaltması konabilir (kelimeler aşağıda).
 - İlk `@ad` kimden bilgisidir. `#kelime` etikettir ve `capture_label_aliases` ile çevrilir. Yalnız rakamdan oluşan `#123` düz metin kalır.
 - `capture_refs` önekiyle başlayıp en az iki rakamla süren kelime (`R12345`) linke çevrilir.
 - Geri kalan kelimeler başlıktır.
+
+Kelimeler arayüz diline bağlıdır, büyük küçük harf ayırmaz ve `capture_words` üstüne ekler:
+
+| Dil | yarın | dakika | saat | Pazartesi'den Pazar'a |
+|---|---|---|---|---|
+| `en` | `tomorrow` | `min`, `m` | `h` | `mon`/`monday`, `tue`/`tuesday`, `wed`/`wednesday`, `thu`/`thursday`, `fri`/`friday`, `sat`/`saturday`, `sun`/`sunday` |
+| `tr` | `yarın`, `yarin` | `dk` | `s` | `pzt`/`pts`, `sal`, `çar`/`car`, `per`/`prş`/`prs`, `cum`, `cmt`, `paz` |
+
+Örneğin Türkçe `focusdeck capture "R12345 arandı #tel yarın 14:00"`, İngilizce `focusdeck capture "R12345 called #tel tomorrow 14:00"`.
 
 ## Hatırlatma
 
@@ -152,16 +168,26 @@ Plugin, çekirdeğin her kutu için bir kez başlatıp açık tuttuğu bir progr
 - İstek başına zaman aşımı 15 saniyedir. Zaman aşımı, JSON olmayan satır ya da süreç çökmesi kutuda kırmızı bir satır olarak görünür; çekirdek plugin'i bir sonraki yenilemede yeniden başlatır, öteki kutular etkilenmez.
 - `describe` cevabındaki `protocol` çekirdeğin bildiği sürümden farklıysa kutu açılmaz.
 - Çekirdek yalnız `*_file` yolunu ve izinlerini denetler; şifreyi plugin dosyadan kendisi okur, değer çekirdekten geçmez.
-- Plugin istenen dilde yazılabilir, tek şart protokole uymak.
+- Çekirdek her plugin'i istenen arayüz dilini `FOCUSDECK_LANG` ortam değişkeninde (örneğin `tr`) vererek başlatır, dil yoksa değişkeni kaldırır. Plugin'in o dilde çevirisi yoksa İngilizce kullanılır.
+- Plugin herhangi bir dille yazılabilir, tek şart protokole uymak.
 
 Rust ile plugin yazanlar için tipler ve `Plugin` trait'iyle satır döngüsünü yürüten `serve` yardımcısı `focusdeck-protocol` crate'inde durur:
 
 ```toml
 [dependencies]
-focusdeck-protocol = { git = "https://github.com/omertahaoztop/focusdeck", tag = "v0.1.0" }
+focusdeck-protocol = { git = "https://github.com/omertahaoztop/focusdeck", tag = "v0.2.0" }
 ```
 
 `Plugin` trait'ini uygulayıp `focusdeck_protocol::serve(plugin, stdin.lock(), stdout)` çağırmak yeter.
+
+## Çeviri
+
+Bir dil tek dosyadır: [Fluent](https://projectfluent.org/) söz diziminde `crates/focusdeck/locales/<kod>.ftl` ekle (örneğin `de.ftl`) ve yeniden derle; dosya adı, `language` ve `LANG` değerinin eşleştiği koddur.
+
+- Temel `en.ftl` dosyasıdır. Kopyala, değerleri çevir; mesaj kimlikleri ve `{ $değişken }` adları olduğu gibi kalır.
+- `cargo test`, eksik ya da fazla kimlikleri ve `en.ftl`'den farklı değişkenleri söyleyerek düşer; yarım bir çeviri içeri giremez.
+- `capture-words-*` girdileri cümle değil, boşlukla ayrılmış yazım listesidir: `capture-words-tomorrow`, `capture-words-minute`, `capture-words-hour` ve `capture-words-mon` ile `capture-words-sun` arası. İnsanların gerçekten yazdığı biçimleri koy; klavye düzeni yüzünden aksansız yazım olası ise onu da ekle.
+- Bir plugin'in yazdığı metinler burada değil, [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) reposunda çevrilir.
 
 ## Geliştirme
 

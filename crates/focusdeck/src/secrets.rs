@@ -138,14 +138,14 @@ mod tests {
     fn expands_tilde_in_file_keys() {
         let home = tempfile::tempdir().unwrap();
         write_secret(&home.path().join("s/v"), 0o600);
-        let spec = spec("url = \"~/not-a-file\"\ntoken_file = \"~/s/v\"\nproject = \"Mono\"");
+        let spec = spec("url = \"~/not-a-file\"\ntoken_file = \"~/s/v\"\nproject = \"Home\"");
         let json = plugin_config(&spec, home.path()).unwrap();
         assert_eq!(
             json["token_file"],
             home.path().join("s/v").to_str().unwrap()
         );
         assert_eq!(json["url"], "~/not-a-file");
-        assert_eq!(json["project"], "Mono");
+        assert_eq!(json["project"], "Home");
     }
 
     #[test]

@@ -363,12 +363,12 @@ mod tests {
 
     #[test]
     fn ref_becomes_link() {
-        let c = p("S3 R45539 bak").unwrap();
+        let c = p("S3 R12345 bak").unwrap();
         assert_eq!(
             c.links,
             [Link {
-                label: "R45539".into(),
-                url: "https://redmine.example.com/issues/45539".into()
+                label: "R12345".into(),
+                url: "https://redmine.example.com/issues/12345".into()
             }]
         );
         assert_eq!(c.title, "S3 bak");
@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn into_item_maps_fields() {
-        let item = p("@ali log #tel R45539 14:30 // not").unwrap().into_item();
+        let item = p("@ali log #tel R12345 14:30 // not").unwrap().into_item();
         assert_eq!(item.id, "");
         assert!(!item.overdue);
         assert_eq!(item.title, "log");

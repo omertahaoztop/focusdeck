@@ -288,7 +288,7 @@ plugin = "vikunja"
 row = 0
 col = 0
 refresh = "1m"
-config = { url = "https://vikunja.example.com", token_file = "~/.config/focusdeck/secrets/vikunja", project = "Mono" }
+config = { url = "https://vikunja.example.com", token_file = "~/.config/focusdeck/secrets/vikunja", project = "Home" }
 
 [[box]]
 id = "redmine"
@@ -329,7 +329,7 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
         }
         assert_eq!(p.boxes[0].title, "Sözlü işler");
         assert_eq!(p.boxes[1].plan_into.as_deref(), Some("sozlu"));
-        assert_eq!(p.boxes[0].config["project"].as_str(), Some("Mono"));
+        assert_eq!(p.boxes[0].config["project"].as_str(), Some("Home"));
         assert_eq!(p.box_index("redmine"), Some(1));
         assert_eq!(p.box_index("yok"), None);
     }

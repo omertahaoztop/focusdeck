@@ -169,7 +169,7 @@ git commit -m "Add paths, config, profile and secret file checks"
 
 - [ ] **Step 1: Başarısız testleri yaz**
 
-`now` = `2026-11-12T10:00:00+03:00` (Perşembe). `refs = {R: "https://destek.mono.tr/issues/{}"}`, `aliases = {tel: telefon}`.
+`now` = `2026-11-12T10:00:00+03:00` (Perşembe). `refs = {R: "https://redmine.example.com/issues/{}"}`, `aliases = {tel: telefon}`.
 
 ```rust
 parse("Ali'ye VPN logu at", ..) → title "Ali'ye VPN logu at", due None
@@ -183,7 +183,7 @@ parse("log at pzt 09:00") → 2026-11-16T09:00
 parse("@ali: log at") → from Some("ali"), title "log at"; ikinci @veli başlıkta kalır
 parse("log #tel #mail") → labels ["telefon", "mail"]
 parse("bak #123") → title "bak #123", labels []
-parse("S3 R45539 bak") → links [Link{label:"R45539", url:"https://destek.mono.tr/issues/45539"}], title "S3 bak"
+parse("S3 R12345 bak") → links [Link{label:"R12345", url:"https://redmine.example.com/issues/12345"}], title "S3 bak"
 parse("S3 R4 bak") → link yok, title "S3 R4 bak"
 parse("başlık // ayrıntı burada") → description Some("ayrıntı burada")
 parse("@ali 14:30") → Err("başlık boş")
@@ -377,7 +377,7 @@ Testlerde üç kutulu profil: `sozlu` (vikunja, describe.actions `["done","delet
 // görünürlük ve bağ
 redmine Board'da visible → yalnız sozlu'da source redmine:<id> olanlar; Zoom(redmine)'da hepsi
 planned_count(redmine) == Some((1, 3))
-Search{zoom: redmine, query:"tüyap"} → başlığında "TÜYAP" geçen öğe (Türkçe büyük/küçük harf duyarsız: "İ"/"i", "I"/"ı")
+Search{zoom: redmine, query:"depo"} → başlığında "DEPO" geçen öğe (Türkçe büyük/küçük harf duyarsız: "İ"/"i", "I"/"ı")
 redmine Full listesi Ok gelince, sozlu'da bağlı ama artık listede olmayan öğe için Effect::Action{idx: sozlu, action:"done"}
 redmine listesi Err gelince hiçbir Action üretilmez, eski öğeler kalır, error Some
 Summary listesi Ok gelince bağ kapatma yapılmaz (yalnız Full liste tam listedir)
@@ -539,25 +539,25 @@ Vikunja v2.8 uçları (canlı `/api/v1/docs.json` ile doğrulandı):
 
 - [ ] **Step 1: `view_kind`'in JSON biçimini canlıda doğrula**
 
-Run: `curl -s -H "Authorization: Bearer $(cat ~/.config/pano/vikunja-token)" https://vikunja.omertahaoztop.tr/api/v1/projects/9/views | jq '.[] | {id, view_kind}'`
-Expected: `id 37` olan satırda `view_kind` değeri. Sayıysa (`3`) ve metinse (`"kanban"`) iki biçimi de kabul eden serde çözümü yazılır; görülen değer testteki fixture'a konur.
+Run: `curl -s -H "Authorization: Bearer $(cat ~/.config/pano/vikunja-token)" https://vikunja.example.com/api/v1/projects/1/views | jq '.[] | {id, view_kind}'`
+Expected: `id 2` olan satırda `view_kind` değeri. Sayıysa (`3`) ve metinse (`"kanban"`) iki biçimi de kabul eden serde çözümü yazılır; görülen değer testteki fixture'a konur.
 
 - [ ] **Step 2: Başarısız testleri yaz** (mockito sunucusu, token tempfile 0600)
 
 ```rust
-configure: proje "Mono" → id 9, kanban görünüm 37, default 59, done 61; bucket "Karşı tarafı bekliyorum" → 62
-configure proje yok → Err "Vikunja'da proje yok: Mono"; 401 → Err "Vikunja 401: token geçersiz"
+configure: proje "Home" → id 1, kanban görünüm 2, default 3, done 4; bucket "Karşı tarafı bekliyorum" → 5
+configure proje yok → Err "Vikunja'da proje yok: Home"; 401 → Err "Vikunja 401: token geçersiz"
 list: done sütunundaki görev yok; due "0001-01-01T00:00:00Z" → None; due geçmiş → overdue true
-list: açıklamada "focusdeck-source: redmine:45539" → source Some(redmine/45539)
+list: açıklamada "focusdeck-source: redmine:12345" → source Some(redmine/12345)
 list: "kimden:ali" etiketi → subtitle "@ali" ile başlar, labels'ta yok; url "<url>/tasks/<id>"
 list bucket ayarlıyken yalnız o sütun
-action done → POST .../buckets/61/tasks gövdesinde task_id
+action done → POST .../buckets/4/tasks gövdesinde task_id
 action delete → DELETE /tasks/<id>
 action reorder position 1, liste pozisyonları [100, 200, 300], taşınan 0. öğe → POST /tasks/<id>/position position 250
 action reorder position 0 → ilk öğenin pozisyonunun yarısı; son sıraya → son pozisyon + 65536
-drop (from None): PUT gövdesi title, due_date ve reminders aynı zaman; description "<p>ayrıntı</p><p><a href=\"https://destek.mono.tr/issues/45539\">R45539</a></p>"; labels bulk "mail" ve "kimden:ali" id'leri
+drop (from None): PUT gövdesi title, due_date ve reminders aynı zaman; description "<p>ayrıntı</p><p><a href=\"https://redmine.example.com/issues/12345\">R12345</a></p>"; labels bulk "mail" ve "kimden:ali" id'leri
 drop description HTML kaçışı: "<b>" → "&lt;b&gt;"
-drop source Some(redmine:45539) → açıklamada "<p>focusdeck-source: redmine:45539</p>"
+drop source Some(redmine:12345) → açıklamada "<p>focusdeck-source: redmine:12345</p>"
 drop bucket ayarlı kutuda → görev açıldıktan sonra o sütuna taşınır
 drop from Some(vikunja:77), aynı proje → yeni görev açılmaz, 77 hedef sütuna taşınır
 drop from Some(vikunja:77), başka proje → GET /tasks/77, POST /tasks/77 gövdesinde project_id yeni proje ve diğer alanlar GET'teki gibi
@@ -590,7 +590,7 @@ git commit -m "Add Vikunja plugin and local index script"
 
 **Files:**
 - Create (repo dışı, kullanıcı ayarı): `~/.config/focusdeck/config.toml`, `~/.config/focusdeck/profiles/is.toml`, `~/.config/focusdeck/secrets/vikunja` (0600)
-- Create (Vikunja'da): "Mono Fikirler" projesi
+- Create (Vikunja'da): "Home Ideas" projesi
 
 **Interfaces:**
 - Consumes: her şey
@@ -605,21 +605,21 @@ install -D -m 600 ~/.config/pano/vikunja-token ~/.config/focusdeck/secrets/vikun
 Run: `focusdeck plugin install vikunja && focusdeck plugin list`
 Expected: `vikunja  0.1.0`
 
-- [ ] **Step 2: "Mono Fikirler" projesini aç**
+- [ ] **Step 2: "Home Ideas" projesini aç**
 
-Run: `curl -s -X PUT -H "Authorization: Bearer $(cat ~/.config/focusdeck/secrets/vikunja)" -H 'Content-Type: application/json' -d '{"title":"Mono Fikirler"}' https://vikunja.omertahaoztop.tr/api/v1/projects | jq '{id, title}'`
-Expected: yeni `id` ve `"title": "Mono Fikirler"`
+Run: `curl -s -X PUT -H "Authorization: Bearer $(cat ~/.config/focusdeck/secrets/vikunja)" -H 'Content-Type: application/json' -d '{"title":"Home Ideas"}' https://vikunja.example.com/api/v1/projects | jq '{id, title}'`
+Expected: yeni `id` ve `"title": "Home Ideas"`
 
 - [ ] **Step 3: İş profili**
 
-`is.toml`: `capture_into = "sozlu"`, `capture_refs = { R = "https://destek.mono.tr/issues/{}" }`, `capture_label_aliases = { tel = "telefon", telefon = "telefon", yuz = "yuz-yuze", "yüz" = "yuz-yuze" }`; kutular `sozlu` (row 0 col 0, project "Mono", refresh "1m"), `bekliyor` (row 0 col 1, project "Mono", bucket "Karşı tarafı bekliyorum"), `fikir` (row 1 col 0, width 2, project "Mono Fikirler").
+`is.toml`: `capture_into = "sozlu"`, `capture_refs = { R = "https://redmine.example.com/issues/{}" }`, `capture_label_aliases = { tel = "telefon", telefon = "telefon", yuz = "yuz-yuze", "yüz" = "yuz-yuze" }`; kutular `sozlu` (row 0 col 0, project "Home", refresh "1m"), `bekliyor` (row 0 col 1, project "Home", bucket "Karşı tarafı bekliyorum"), `fikir` (row 1 col 0, width 2, project "Home Ideas").
 
 - [ ] **Step 4: Canlı deneme**
 
 ```bash
-focusdeck capture "focusdeck deneme @ali #tel R45539 yarın 09:00"
+focusdeck capture "focusdeck deneme @ali #tel R12345 yarın 09:00"
 ```
-Expected: çıkış 0, "eklendi" bildirimi; Vikunja Mono'da görev: due ve hatırlatma yarın 09:00, etiketler `telefon` ve `kimden:ali`, açıklamada Redmine linki.
+Expected: çıkış 0, "eklendi" bildirimi; Vikunja Home'da görev: due ve hatırlatma yarın 09:00, etiketler `telefon` ve `kimden:ali`, açıklamada Redmine linki.
 
 `hyprctl dispatch 'hl.dsp.exec_cmd("ghostty -e focusdeck", {workspace="6 silent", float=true, size="1800 1000", center=true})'` ile aç, `grim` ile ekran görüntüsü al. Görüntüde üç kutu, deneme görevi Sözlü işler'de, alt satırda ipucu. Deneme görevini fareyle Bekliyorum kutusuna sürükle, Vikunja'da sütunu değişmiş olsun; sonra `x` ile bitir, Vikunja'da done olsun.
 

@@ -514,7 +514,7 @@ mod tests {
         app.focus = REDMINE;
         app.mode = Mode::Zoom(REDMINE);
         let term = render(&app, 120, 40);
-        find(&term, "★ TÜYAP hazırlığı");
+        find(&term, "★ DEPO hazırlığı");
         find(&term, "İstanbul sunucusu");
         assert!(!rows(&term).iter().any(|r| r.contains("★ İstanbul")));
         assert!(!rows(&term).iter().any(|r| r.contains("sozlu")));

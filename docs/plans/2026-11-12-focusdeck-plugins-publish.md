@@ -136,7 +136,7 @@ Liste: `GET {api}/messages?q=is:starred&maxResults=100` ve `nextPageToken` biten
 **Files:**
 - Create: `focusdeck-plugins/tools/focusdeck-index/Cargo.toml`, `src/main.rs`, `src/lib.rs`
 - Create: `focusdeck-plugins/.github/workflows/ci.yml`, `.github/workflows/release.yml`, `index.toml` (boş dosya), `LICENSE` (MIT, `Ömer Taha Öztop`)
-- Modify: `focusdeck-plugins/README.md`, `focusdeck-plugins/plugins/vikunja/tests/vikunja.rs` (`destek.mono.tr` → `redmine.example.com`)
+- Modify: `focusdeck-plugins/README.md`, `focusdeck-plugins/plugins/vikunja/tests/vikunja.rs` (`redmine.example.com` → `redmine.example.com`)
 
 **Interfaces:**
 - Produces: `focusdeck_index::{Entry, Target, set_entry(index: &str, entry: Entry) -> Result<String, String>, check_tag(tag: &str, name: &str, version: &str) -> Result<(), String>}`; ikili alt komutları `focusdeck-index set --index <dosya> --name <ad> --description <metin> --version <sürüm> --target <üçlü>=<url>,<sha256>...` (dosyayı yerinde yazar) ve `focusdeck-index check-tag --tag <etiket> --name <ad> --version <sürüm>`.
@@ -153,21 +153,21 @@ README: kurulum (`focusdeck plugin install <ad>`), dört plugin'in ayar anahtarl
 - [ ] **Step 2: Koş, derlenmediğini gör**: `cargo test -p focusdeck-index`.
 - [ ] **Step 3: Aracı yaz** (`toml`, `serde`, `clap` workspace bağımlılığı, sürümler çekirdekle aynı).
 - [ ] **Step 4: Koş**: PASS.
-- [ ] **Step 5: İş akışlarını, `index.toml`, `LICENSE`, README ve Vikunja test adresini yaz.** Doğrulama: `actionlint` kuruluysa `actionlint .github/workflows/*.yml` temiz; değilse `python3 -c 'import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]' .github/workflows/*.yml` hatasız. `grep -rIn "mono\.tr\|omertahaoztop\.tr" --exclude-dir=target --exclude-dir=.git .` boş (`dist/` gitignore'da).
+- [ ] **Step 5: İş akışlarını, `index.toml`, `LICENSE`, README ve Vikunja test adresini yaz.** Doğrulama: `actionlint` kuruluysa `actionlint .github/workflows/*.yml` temiz; değilse `python3 -c 'import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]' .github/workflows/*.yml` hatasız. iş alan adlarını arayan `grep -rIn` (`target` ve `.git` hariç) boş (`dist/` gitignore'da).
 - [ ] **Step 6: Workspace testleri ve clippy temiz, commit**: `Add index tool and release workflows`
 
 ### Task 5: çekirdek reposunu yayına hazırla
 
 **Files:**
 - Create: `focusdeck/README.md`, `focusdeck/LICENSE` (MIT, `Ömer Taha Öztop`), `focusdeck/.github/workflows/ci.yml`
-- Modify: `focusdeck/crates/focusdeck/src/capture.rs:215,317`, `focusdeck/crates/focusdeck/src/profile.rs:206-246` (`destek.mono.tr` → `redmine.example.com`, `vikunja.omertahaoztop.tr` → `vikunja.example.com`)
+- Modify: `focusdeck/crates/focusdeck/src/capture.rs:215,317`, `focusdeck/crates/focusdeck/src/profile.rs:206-246` (`redmine.example.com` → `redmine.example.com`, `vikunja.example.com` → `vikunja.example.com`)
 
 **Interfaces:**
 - Produces: GitHub'a gönderilmeye hazır çekirdek; `focusdeck-protocol` sürümü `0.1.0` kalır.
 
 README: ne olduğu (iki cümle), kurulum `cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.1.0 --locked focusdeck`, `~/.config/focusdeck/config.toml` ve örnek profil (spec'teki örnek, `example.com` adresleriyle), tuş ve fare tablosu (spec "Ekran ve etkileşim"), `capture` ve `remind` kullanımı, plugin'lerin kullanıcının yetkisiyle çalıştığı ve kum havuzu olmadığı uyarısı, protokol özeti ve Rust plugin yazarları için `focusdeck-protocol` bağımlılık satırı (`git`, `tag = "v0.1.0"`). `ci.yml` Task 4'teki CI ile aynı biçim.
 
-- [ ] **Step 1: Adresleri değiştir, testleri koş**: `cargo test --workspace` PASS; `grep -rIn "mono\.tr\|omertahaoztop\.tr" crates` boş.
+- [ ] **Step 1: Adresleri değiştir, testleri koş**: `cargo test --workspace` PASS; iş alan adlarını arayan `grep -rIn` `crates` altında boş.
 - [ ] **Step 2: README, LICENSE, `ci.yml` yaz**; `ci.yml` Task 4 Step 5'teki gibi doğrulanır.
 - [ ] **Step 3: Clippy temiz, commit**: `Prepare repository for publishing`
 
@@ -185,6 +185,6 @@ Kullanıcının makinesinde ve hesabında iş yaptığı için dağıtılmaz, co
 
 - [ ] **Step 1: Kayıt adresi**: `~/.config/focusdeck/config.toml` içindeki `file://` kaydı silinir, varsayılan GitHub dizini kullanılır. `focusdeck plugin install` ile `vikunja`, `redmine`, `zulip`, `gmail` kurulur; `focusdeck plugin list` dördünü `0.1.0` gösterir.
 - [ ] **Step 2: Şifreler kopyalanır (0600, değer basılmadan)**: `~/.config/redmine/api-key` → `secrets/redmine`, `~/.config/pano/zulip-key` → `secrets/zulip`, `~/.config/pano/client_secret.json` → `secrets/gmail-client.json`, `~/.config/pano/gmail-token.json` → `secrets/gmail-token.json`. Kaynaklar yerinde kalır.
-- [ ] **Step 3: Profil**: `is.toml` 3×2 ızgara. Satır 0: `sozlu` (0,0), `bekliyor` (0,1), `redmine` (0,2; `title = "Redmine planım"`, `plan_into = "sozlu"`, `url = "https://destek.mono.tr"`). Satır 1: `mail` (1,0; `title = "Mail"`), `zulip` (1,1; `title = "Zulip"`, `url = "https://chat.mono.tr"`, `email = "taha.oztop@mono.tr"`), `fikir` (1,2, `width` kalkar).
+- [ ] **Step 3: Profil**: `is.toml` 3×2 ızgara. Satır 0: `sozlu` (0,0), `bekliyor` (0,1), `redmine` (0,2; `title = "Redmine planım"`, `plan_into = "sozlu"`, `url = "https://redmine.example.com"`). Satır 1: `mail` (1,0; `title = "Mail"`), `zulip` (1,1; `title = "Zulip"`, `url = "https://zulip.example.com"`, `email = "user@example.com"`), `fikir` (1,2, `width` kalkar).
 - [ ] **Step 4: Canlı denetim (tmux 150×40, `env -u NO_COLOR`)**: altı kutu hatasız açılır; Redmine büyütülünce `total_count` kadar iş; boşluk bir işi Sözlü işler'e alır, ikinci boşluk görevi siler; Zulip öğesinde `o` doğru mesajı açar (`#narrow/id/<id>`), bir yıldız `u` ile kalkar ve API ile geri eklenir; Mail kutusu yıldızlı mailleri en eski üstte gösterir. ghostty ekran görüntüsü alınır.
 - [ ] **Step 5: Kayıt**: brain'e focusdeck karar kaydı (`journal_write kind=decision`), `wiki/musteri-iletisim.md` içindeki `pano` satırı focusdeck'i anlatacak şekilde güncellenir, wiki denetimi koşar.

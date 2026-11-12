@@ -105,7 +105,7 @@ Kullanıcı topluluk çevirisini istediği için 2. yol seçildi. Format öneris
 
 ### Anonimleştirme
 
-- İki reponun çalışma ağacında iş bilgisi kalmaz: test ve örneklerdeki şirket/proje adı (`Mono`), gerçek iş numarası (`45539`), müşteri adı (`TÜYAP`) ve `docs/` altındaki iş alan adları, iş e-postası, Vikunja proje/sütun kimlikleri nötr örneklerle (`example.com`, `Home`, `12345`) değiştirilir. Yeni yazılan test ve çevirilerde de gerçek kişi, şirket ya da iş verisi kullanılmaz.
+- İki reponun çalışma ağacında iş bilgisi kalmaz: test ve örneklerdeki iş alan adları, proje adı, müşteri adı, iş numarası, iş e-postası ve `docs/` altındaki Vikunja proje/görünüm/sütun kimlikleri nötr örneklerle (`example.com`, `Home`, `12345`, `1`, `2`, `3`) değiştirilir. Yeni yazılan test ve çevirilerde de gerçek kişi, şirket ya da iş verisi kullanılmaz.
 - Git geçmişi yeniden yazılmaz; yalnız dosyalar düzeltilir. (Benim kararım: geçmişte sır yok, yalnız alan adları ve proje adları var; repo silinip yeniden açılmaz.)
 
 ## Yapana bırakılanlar
