@@ -3,11 +3,11 @@
 use std::io;
 
 use chrono::{DateTime, FixedOffset};
+use focusdeck_i18n::Localizer;
 use focusdeck_protocol::{
     ActionParams, Describe, DropParams, Item, ListParams, PROTOCOL_VERSION, Plugin, Reminder,
     RemindersParams,
 };
-use focusdeck_i18n::Localizer;
 use serde_json::Value;
 
 use super::store::{Record, Store, StoreError, new_id};
@@ -31,7 +31,10 @@ fn flatten<T>(outcome: Result<Result<T, String>, StoreError>) -> Result<T, Strin
 
 fn invalid_settings(l: &Localizer) -> String {
     let hint = l.t(msg::LOCAL_LIST_REQUIRED);
-    l.t_args(msg::LOCAL_INVALID_SETTINGS, &[("error", hint.as_str().into())])
+    l.t_args(
+        msg::LOCAL_INVALID_SETTINGS,
+        &[("error", hint.as_str().into())],
+    )
 }
 
 fn item_missing(id: &str) -> String {
