@@ -323,7 +323,8 @@ async fn log_stderr(label: String, stderr: ChildStderr, path: PathBuf) {
     while let Ok(Some(line)) = read_capped(&mut reader, MAX_STDERR_LINE, true).await {
         // keeps draining when the log is unwritable so the child never blocks on a full pipe
         let Some(f) = file.as_mut() else { continue };
-        let entry = format!("[{label}] {}\n", String::from_utf8_lossy(&line.bytes));
+        let text = String::from_utf8_lossy(&line.bytes);
+        let entry = format!("[{label}] {}\n", text.strip_suffix('\r').unwrap_or(&text));
         if f.write_all(entry.as_bytes()).await.is_err() || f.flush().await.is_err() {
             file = None;
         }

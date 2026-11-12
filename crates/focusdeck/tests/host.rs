@@ -56,11 +56,12 @@ impl Env {
     fn exe(&self) -> PathBuf {
         let script = self.dir.path().join("run.sh");
         let body = format!(
-            "#!/bin/sh\nFAKE_MODE_FILE='{}' FAKE_LOG='{}' FAKE_LANG_LOG='{}' FAKE_START_LOG='{}' exec '{}'\n",
+            "#!/bin/sh\nFAKE_MODE_FILE='{}' FAKE_LOG='{}' FAKE_LANG_LOG='{}' FAKE_START_LOG='{}' FAKE_PID_LOG='{}' exec '{}'\n",
             self.dir.path().join("mode").display(),
             self.fake_log().display(),
             self.lang_log().display(),
             self.start_log().display(),
+            self.pid_log().display(),
             fake_plugin().display()
         );
         std::fs::write(&script, body).unwrap();
@@ -78,6 +79,10 @@ impl Env {
 
     fn start_log(&self) -> PathBuf {
         self.dir.path().join("starts.log")
+    }
+
+    fn pid_log(&self) -> PathBuf {
+        self.dir.path().join("pid")
     }
 
     fn starts(&self) -> usize {
@@ -322,6 +327,17 @@ async fn protocol_violations_are_reported() {
             ),
             None => assert!(matches!(err, HostError::Crashed), "{mode}: {err:?}"),
         }
+        if mode == "raw-oversize" {
+            let pid = std::fs::read_to_string(env.pid_log()).unwrap();
+            let proc = Path::new("/proc").join(pid.trim());
+            for _ in 0..40 {
+                if !proc.exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            assert!(!proc.exists(), "the child outlived the over-long line");
+        }
         env.set_mode("ok");
         let result: ListResult = host.call("list", &summary()).await.unwrap();
         assert_eq!(result.items.len(), 2, "{mode}");
@@ -345,6 +361,22 @@ async fn oversized_stderr_line_is_cut_in_the_log() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(lines, [cut, "[sozlu] after".to_owned()]);
+}
+
+#[tokio::test]
+async fn carriage_return_is_stripped_from_stderr_log_lines() {
+    let env = Env::new("raw-stderr-cr");
+    let mut host = env.host();
+    let _: ListResult = host.call("list", &summary()).await.unwrap();
+    let mut text = String::new();
+    for _ in 0..100 {
+        text = std::fs::read_to_string(env.log()).unwrap_or_default();
+        if text.ends_with('\n') {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(text, "[sozlu] cr-line\n");
 }
 
 #[tokio::test]

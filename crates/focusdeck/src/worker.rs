@@ -52,19 +52,10 @@ pub fn spawn(
     tokio::spawn(async move {
         let mut described = false;
         // the first command is answered with this error instead of trying the handshake a second time
-        let mut start_error = match host.describe().await {
-            Ok(describe) => {
-                described = true;
-                if tx
-                    .send(BoxEvent::Described { idx, describe })
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                None
-            }
-            Err(e) => Some(e.to_string()),
+        let mut start_error = match announce(idx, &mut host, &mut described, &tx).await {
+            Announced::Ready => None,
+            Announced::Failed(error) => Some(error),
+            Announced::ReceiverGone => return,
         };
         while let Some(cmd) = rx.recv().await {
             let failure = if described {
@@ -72,19 +63,10 @@ pub fn spawn(
             } else if let Some(error) = start_error.take() {
                 Some(error)
             } else {
-                match host.describe().await {
-                    Ok(describe) => {
-                        described = true;
-                        if tx
-                            .send(BoxEvent::Described { idx, describe })
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                        None
-                    }
-                    Err(e) => Some(e.to_string()),
+                match announce(idx, &mut host, &mut described, &tx).await {
+                    Announced::Ready => None,
+                    Announced::Failed(error) => Some(error),
+                    Announced::ReceiverGone => return,
                 }
             };
             let event = match (cmd, failure) {
@@ -146,4 +128,28 @@ pub fn spawn(
             }
         }
     })
+}
+
+enum Announced {
+    Ready,
+    Failed(String),
+    ReceiverGone,
+}
+
+async fn announce(
+    idx: usize,
+    host: &mut PluginHost,
+    described: &mut bool,
+    tx: &mpsc::Sender<BoxEvent>,
+) -> Announced {
+    match host.describe().await {
+        Ok(describe) => {
+            *described = true;
+            match tx.send(BoxEvent::Described { idx, describe }).await {
+                Ok(()) => Announced::Ready,
+                Err(_) => Announced::ReceiverGone,
+            }
+        }
+        Err(e) => Announced::Failed(e.to_string()),
+    }
 }

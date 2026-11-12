@@ -586,7 +586,11 @@ async fn loopback_http_is_allowed() {
     assert_eq!(std::fs::read(plugins.path().join("redmine")).unwrap(), BIN);
     for url in ["http://[::1]:9/x", "http://localhost:9/x"] {
         let err = install::fetch(url).await.unwrap_err();
-        assert_ne!(err.to_string(), format!("{INSECURE}{url}"), "{url}");
+        assert_eq!(
+            err.to_string(),
+            format!("could not download {url}"),
+            "{url}"
+        );
     }
 }
 

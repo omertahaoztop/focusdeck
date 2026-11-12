@@ -1,4 +1,4 @@
-//! Test plugin whose behaviour comes from FAKE_MODE_FILE or FAKE_MODE; configure and drop calls are appended to FAKE_LOG, reminders come from FAKE_REMINDERS_FILE, FOCUSDECK_LANG is written to FAKE_LANG_LOG at start.
+//! Test plugin driven by FAKE_MODE_FILE or FAKE_MODE (raw-* modes break the protocol); writes FAKE_LOG, FAKE_LANG_LOG, FAKE_START_LOG, FAKE_PID_LOG; reminders from FAKE_REMINDERS_FILE.
 
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, Write};
@@ -162,7 +162,19 @@ fn misbehave(mode: &str, id: u64) -> io::Result<()> {
         "raw-non-json" => writeln!(out, "not json")?,
         "raw-long-non-json" => writeln!(out, "{}", "x".repeat(300))?,
         "raw-wrong-id" => writeln!(out, "{}", json!({"id": id + 99, "result": {"items": []}}))?,
-        "raw-oversize" => writeln!(out, "{}", "x".repeat(4096))?,
+        "raw-oversize" => {
+            if let Ok(path) = std::env::var("FAKE_PID_LOG") {
+                std::fs::write(path, std::process::id().to_string())?;
+            }
+            writeln!(out, "{}", "x".repeat(4096))?;
+            out.flush()?;
+            // stays alive so only the host can end it
+            std::thread::sleep(Duration::from_secs(60));
+        }
+        "raw-stderr-cr" => {
+            write!(io::stderr(), "cr-line\r\n")?;
+            writeln!(out, "{}", json!({"id": id, "result": {"items": []}}))?;
+        }
         "raw-bad-result" => writeln!(out, "{}", json!({"id": id, "result": {"items": 5}}))?,
         "raw-stderr-long" => {
             let mut err = io::stderr();
