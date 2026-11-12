@@ -5,6 +5,10 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use focusdeck::host::{HostError, PluginHost};
+use focusdeck::install::sha256_hex;
+use focusdeck::paths::Paths;
+use focusdeck::profile::BoxSpec;
+use focusdeck::ui::run::build_host;
 use focusdeck::worker::{self, BoxCmd, BoxEvent};
 use focusdeck_protocol::{Item, ListParams, ListResult, View};
 use serde_json::{Value, json};
@@ -503,4 +507,49 @@ async fn worker_runs_action_and_drop() {
     }
     drop(cmd_tx);
     handle.await.unwrap();
+}
+
+fn installed_plugin(env: &Env, manifest: Option<&str>) -> (Paths, BoxSpec, String) {
+    let paths = Paths {
+        config_dir: env.dir.path().join("config"),
+        data_dir: env.dir.path().join("data"),
+        state_dir: env.dir.path().join("state"),
+    };
+    let plugins = paths.plugin_dir();
+    std::fs::create_dir_all(&plugins).unwrap();
+    std::fs::copy(env.exe(), plugins.join("fake")).unwrap();
+    let hash = sha256_hex(&std::fs::read(plugins.join("fake")).unwrap());
+    if let Some(sha) = manifest {
+        let sha = if sha.is_empty() { &hash } else { sha };
+        std::fs::write(
+            plugins.join("fake.toml"),
+            format!("version = \"0.1.0\"\nsha256 = \"{sha}\"\nregistry = \"r\"\n"),
+        )
+        .unwrap();
+    }
+    let spec: BoxSpec =
+        toml::from_str("id = \"a\"\ntitle = \"A\"\nplugin = \"fake\"\nrow = 0\ncol = 0\n").unwrap();
+    (paths, spec, hash)
+}
+
+#[tokio::test]
+async fn changed_binary_does_not_start() {
+    let env = Env::new("ok");
+    let (paths, spec, _) = installed_plugin(&env, Some(&"0".repeat(64)));
+    let err = build_host(&paths, env.dir.path(), &spec).err().unwrap();
+    assert_eq!(
+        err,
+        "fake no longer matches its manifest; run \"focusdeck plugin install fake\" again"
+    );
+    let (paths, spec, _) = installed_plugin(&env, Some(""));
+    let mut host = build_host(&paths, env.dir.path(), &spec).ok().unwrap();
+    assert_eq!(host.describe().await.unwrap().name, "fake");
+}
+
+#[tokio::test]
+async fn plugin_without_manifest_still_starts() {
+    let env = Env::new("ok");
+    let (paths, spec, _) = installed_plugin(&env, None);
+    let mut host = build_host(&paths, env.dir.path(), &spec).ok().unwrap();
+    assert_eq!(host.describe().await.unwrap().name, "fake");
 }
