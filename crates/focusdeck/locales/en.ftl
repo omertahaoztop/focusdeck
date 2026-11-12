@@ -188,6 +188,7 @@ local-file-newer = { $path } was written by a newer focusdeck (format { $version
 local-file-io = { $path }: { $error }
 local-invalid-settings = invalid local box settings: { $error }
 local-item-missing = note { $id } is not in this box
+local-list-required = `list` must be a non-empty string
 local-position-required = a position is required
 local-unknown-action = unknown action: { $action }
 

@@ -7,14 +7,14 @@ use focusdeck_protocol::{
     ActionParams, Describe, DropParams, Item, ListParams, PROTOCOL_VERSION, Plugin, Reminder,
     RemindersParams,
 };
+use focusdeck_i18n::Localizer;
 use serde_json::Value;
 
 use super::store::{Record, Store, StoreError, new_id};
-use crate::i18n::{msg, t, t_args};
+use crate::i18n::{self, msg, t, t_args};
 use crate::paths::Paths;
 
 const POSITION_STEP: f64 = 1024.0;
-const SETTINGS_HINT: &str = "`list` must be a non-empty string";
 
 pub struct Local {
     store: Store,
@@ -29,8 +29,9 @@ fn flatten<T>(outcome: Result<Result<T, String>, StoreError>) -> Result<T, Strin
     outcome.map_err(|e| e.to_string())?
 }
 
-fn invalid_settings(error: &str) -> String {
-    t_args(msg::LOCAL_INVALID_SETTINGS, &[("error", error.into())])
+fn invalid_settings(l: &Localizer) -> String {
+    let hint = l.t(msg::LOCAL_LIST_REQUIRED);
+    l.t_args(msg::LOCAL_INVALID_SETTINGS, &[("error", hint.as_str().into())])
 }
 
 fn item_missing(id: &str) -> String {
@@ -101,7 +102,7 @@ impl Local {
     fn list_name(&self) -> Result<&str, String> {
         self.list
             .as_deref()
-            .ok_or_else(|| invalid_settings(SETTINGS_HINT))
+            .ok_or_else(|| invalid_settings(i18n::current()))
     }
 
     fn reorder(&self, id: &str, args: &Value) -> Result<(), String> {
@@ -146,7 +147,7 @@ impl Plugin for Local {
             .get("list")
             .and_then(Value::as_str)
             .filter(|l| !l.is_empty())
-            .ok_or_else(|| invalid_settings(SETTINGS_HINT))?;
+            .ok_or_else(|| invalid_settings(i18n::current()))?;
         self.list = Some(list.to_string());
         Ok(())
     }
@@ -359,6 +360,11 @@ mod tests {
             assert!(err.starts_with("invalid local box settings"), "{err}");
         }
         assert!(local.list(summary()).is_err());
+        let tr = i18n::localizer(Some("tr"));
+        assert_eq!(
+            invalid_settings(&tr),
+            "yerel kutu ayarı geçersiz: `list` boş olmayan bir metin olmalı"
+        );
         local.configure(json!({"list": "ev", "other": 1})).unwrap();
         assert_eq!(local.list(summary()).unwrap(), vec![]);
     }

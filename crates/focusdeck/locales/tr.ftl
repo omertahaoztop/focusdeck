@@ -184,6 +184,7 @@ local-file-newer = { $path } daha yeni bir focusdeck ile yazılmış (biçim { $
 local-file-io = { $path }: { $error }
 local-invalid-settings = yerel kutu ayarı geçersiz: { $error }
 local-item-missing = { $id } notu bu kutuda yok
+local-list-required = `list` boş olmayan bir metin olmalı
 local-position-required = sıra numarası gerekli
 local-unknown-action = bilinmeyen eylem: { $action }
 
