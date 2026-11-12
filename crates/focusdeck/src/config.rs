@@ -6,9 +6,26 @@ use std::io::ErrorKind;
 pub const DEFAULT_REGISTRY: &str =
     "https://raw.githubusercontent.com/omertahaoztop/focusdeck-plugins/main/index.toml";
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CaptureWords {
+    pub tomorrow: Vec<String>,
+    pub minute: Vec<String>,
+    pub hour: Vec<String>,
+    pub mon: Vec<String>,
+    pub tue: Vec<String>,
+    pub wed: Vec<String>,
+    pub thu: Vec<String>,
+    pub fri: Vec<String>,
+    pub sat: Vec<String>,
+    pub sun: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub language: Option<String>,
+    pub capture_words: CaptureWords,
     pub default_profile: Option<String>,
     pub registries: Vec<String>,
     pub capture_command: Vec<String>,
@@ -17,6 +34,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            language: None,
+            capture_words: CaptureWords::default(),
             default_profile: None,
             registries: vec![DEFAULT_REGISTRY.to_string()],
             capture_command: ["rofi", "-dmenu", "-p", "Not"].map(String::from).to_vec(),
@@ -47,6 +66,30 @@ mod tests {
             data_dir: dir.join("data"),
             state_dir: dir.join("state"),
         }
+    }
+
+    #[test]
+    fn language_and_capture_words_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "language = \"tr\"\n[capture_words]\ntomorrow = [\"tmrw\"]\n",
+        )
+        .unwrap();
+        let cfg = Config::load(&paths(dir.path())).unwrap();
+        assert_eq!(cfg.language.as_deref(), Some("tr"));
+        assert_eq!(cfg.capture_words.tomorrow, ["tmrw"]);
+        assert!(cfg.capture_words.minute.is_empty());
+
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[capture_words]\ntomorow = [\"x\"]\n",
+        )
+        .unwrap();
+        assert!(Config::load(&paths(dir.path())).is_err());
+
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(Config::load(&paths(empty.path())).unwrap().language, None);
     }
 
     #[test]

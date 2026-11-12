@@ -206,12 +206,10 @@ pub fn build_host(
         ));
     }
     let config = secrets::plugin_config(spec, home).map_err(|e| e.to_string())?;
-    Ok(PluginHost::new(
-        spec.id.clone(),
-        exe,
-        config,
-        paths.log_file(),
-    ))
+    Ok(
+        PluginHost::new(spec.id.clone(), exe, config, paths.log_file())
+            .with_lang(crate::i18n::requested().map(str::to_owned)),
+    )
 }
 
 pub async fn tui(paths: &Paths, _cfg: &Config, profile: Profile) -> anyhow::Result<()> {

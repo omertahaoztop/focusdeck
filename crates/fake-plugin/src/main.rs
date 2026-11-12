@@ -1,4 +1,4 @@
-//! Test plugin whose behaviour comes from FAKE_MODE_FILE or FAKE_MODE; configure and drop calls are appended to FAKE_LOG, reminders come from FAKE_REMINDERS_FILE.
+//! Test plugin whose behaviour comes from FAKE_MODE_FILE or FAKE_MODE; configure and drop calls are appended to FAKE_LOG, reminders come from FAKE_REMINDERS_FILE, FOCUSDECK_LANG is written to FAKE_LANG_LOG at start.
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -121,5 +121,9 @@ impl Plugin for Fake {
 }
 
 fn main() -> io::Result<()> {
+    if let Ok(path) = std::env::var("FAKE_LANG_LOG") {
+        let lang = std::env::var("FOCUSDECK_LANG").unwrap_or_else(|_| "-".into());
+        std::fs::write(path, lang)?;
+    }
     serve(Fake, io::stdin().lock(), io::stdout())
 }

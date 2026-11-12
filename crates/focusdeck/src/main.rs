@@ -1,6 +1,7 @@
-use clap::Parser;
+use clap::FromArgMatches;
 use focusdeck::cli::{Cli, Command};
 use focusdeck::config::Config;
+use focusdeck::i18n;
 use focusdeck::paths::Paths;
 use focusdeck::profile::{self, Profile};
 use focusdeck::{capture_cmd, remind};
@@ -8,7 +9,9 @@ use std::process::ExitCode;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse();
+    init_language();
+    let cli = Cli::from_arg_matches(&focusdeck::cli::command().get_matches())
+        .unwrap_or_else(|e| e.exit());
     match run(cli).await {
         Ok(code) => code,
         Err(e) => {
@@ -16,6 +19,18 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn init_language() {
+    let language = Config::load(&Paths::from_env())
+        .ok()
+        .and_then(|config| config.language);
+    let requested = focusdeck_i18n::requested(
+        language.as_deref(),
+        |var| std::env::var(var).ok(),
+        &focusdeck_i18n::CORE_ENV,
+    );
+    i18n::init(requested);
 }
 
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {

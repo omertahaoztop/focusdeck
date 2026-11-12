@@ -114,6 +114,6 @@ fn drop_default_message() {
     let r = run_one(&line);
     assert_eq!(
         r.error.unwrap().message,
-        "bu kutu bırakılan öğe kabul etmiyor"
+        "this box does not accept dropped items"
     );
 }

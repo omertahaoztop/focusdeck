@@ -49,6 +49,7 @@ pub struct PluginHost {
     exe: PathBuf,
     config: Value,
     log: PathBuf,
+    lang: Option<String>,
     timeout: Duration,
     proc: Option<Proc>,
     describe: Option<Describe>,
@@ -61,10 +62,16 @@ impl PluginHost {
             exe,
             config,
             log,
+            lang: None,
             timeout: DEFAULT_TIMEOUT,
             proc: None,
             describe: None,
         }
+    }
+
+    pub fn with_lang(mut self, lang: Option<String>) -> Self {
+        self.lang = lang;
+        self
     }
 
     pub fn with_timeout(mut self, d: Duration) -> Self {
@@ -142,7 +149,11 @@ impl PluginHost {
     }
 
     fn spawn(&self) -> Result<Proc, HostError> {
-        let mut child = Command::new(&self.exe)
+        let mut command = Command::new(&self.exe);
+        if let Some(lang) = &self.lang {
+            command.env("FOCUSDECK_LANG", lang);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

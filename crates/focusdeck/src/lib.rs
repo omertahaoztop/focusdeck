@@ -4,6 +4,7 @@ pub mod cli;
 pub mod config;
 pub mod duration;
 pub mod host;
+pub mod i18n;
 pub mod install;
 pub mod links;
 pub mod notify;

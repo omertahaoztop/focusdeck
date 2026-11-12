@@ -763,6 +763,7 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs",
+ "focusdeck-i18n",
  "focusdeck-protocol",
  "futures-util",
  "mockito",

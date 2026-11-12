@@ -15,7 +15,7 @@ pub trait Plugin {
     fn list(&mut self, p: ListParams) -> Result<Vec<Item>, String>;
     fn action(&mut self, p: ActionParams) -> Result<Option<Item>, String>;
     fn drop_item(&mut self, _p: DropParams) -> Result<Item, String> {
-        Err("bu kutu bırakılan öğe kabul etmiyor".into())
+        Err("this box does not accept dropped items".into())
     }
     fn reminders(&mut self, _p: RemindersParams) -> Result<Vec<Reminder>, String> {
         Ok(vec![])

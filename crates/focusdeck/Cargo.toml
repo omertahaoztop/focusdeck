@@ -10,6 +10,7 @@ chrono.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
+focusdeck-i18n = { path = "../focusdeck-i18n" }
 focusdeck-protocol = { path = "../focusdeck-protocol" }
 futures-util.workspace = true
 ratatui.workspace = true
@@ -21,6 +22,9 @@ thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
 unicode-width.workspace = true
+
+[build-dependencies]
+focusdeck-i18n = { path = "../focusdeck-i18n" }
 
 [dev-dependencies]
 mockito.workspace = true

@@ -52,9 +52,10 @@ impl Env {
     fn exe(&self) -> PathBuf {
         let script = self.dir.path().join("run.sh");
         let body = format!(
-            "#!/bin/sh\nFAKE_MODE_FILE='{}' FAKE_LOG='{}' exec '{}'\n",
+            "#!/bin/sh\nFAKE_MODE_FILE='{}' FAKE_LOG='{}' FAKE_LANG_LOG='{}' exec '{}'\n",
             self.dir.path().join("mode").display(),
             self.fake_log().display(),
+            self.lang_log().display(),
             fake_plugin().display()
         );
         std::fs::write(&script, body).unwrap();
@@ -64,6 +65,21 @@ impl Env {
 
     fn fake_log(&self) -> PathBuf {
         self.dir.path().join("fake.log")
+    }
+
+    fn lang_log(&self) -> PathBuf {
+        self.dir.path().join("lang.log")
+    }
+
+    fn exe_without_lang(&self) -> PathBuf {
+        let script = self.dir.path().join("no-lang.sh");
+        let body = format!(
+            "#!/bin/sh\nunset FOCUSDECK_LANG\nexec '{}'\n",
+            self.exe().display()
+        );
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
     }
 
     fn log(&self) -> PathBuf {
@@ -250,6 +266,29 @@ async fn stderr_goes_to_log() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(found, "log satırı yazılmadı");
+}
+
+#[tokio::test]
+async fn host_passes_requested_language() {
+    let env = Env::new("ok");
+    let mut host = env.host().with_lang(Some("tr-TR".into()));
+    let _: ListResult = host.call("list", &summary()).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(env.lang_log()).unwrap().trim(),
+        "tr-TR"
+    );
+
+    std::fs::remove_file(env.lang_log()).unwrap();
+    let mut host = PluginHost::new(
+        "sozlu".into(),
+        env.exe_without_lang(),
+        json!({"token": "x"}),
+        env.log(),
+    )
+    .with_timeout(Duration::from_millis(500))
+    .with_lang(None);
+    let _: ListResult = host.call("list", &summary()).await.unwrap();
+    assert_eq!(std::fs::read_to_string(env.lang_log()).unwrap().trim(), "-");
 }
 
 async fn next_event(rx: &mut mpsc::Receiver<BoxEvent>) -> BoxEvent {

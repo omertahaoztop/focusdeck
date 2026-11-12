@@ -15,6 +15,10 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+pub fn command() -> clap::Command {
+    <Cli as clap::CommandFactory>::command()
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Metni profildeki capture_into kutusuna ekler
