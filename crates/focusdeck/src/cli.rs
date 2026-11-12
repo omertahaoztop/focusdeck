@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::i18n::{msg, t, t_args};
 use crate::install::{self, Index};
+use crate::local::LOCAL;
 use crate::paths::Paths;
 use crate::profile;
 use clap::{Parser, Subcommand};
@@ -88,7 +89,7 @@ pub async fn run_plugin(
         }
         PluginCommand::List => list(&plugin_dir, config, out).await?,
         PluginCommand::Remove { name } => {
-            install::validate_name(&name)?;
+            install::check_removable(&name)?;
             for profile_name in profiles_using(paths, &name) {
                 let line = t_args(
                     msg::CLI_IN_USE_WARNING,
@@ -117,15 +118,14 @@ async fn list(
     out: &mut impl Write,
 ) -> anyhow::Result<()> {
     let installed = install::installed(plugin_dir);
-    if installed.is_empty() {
-        return Ok(());
-    }
     let mut indexes: Vec<Index> = Vec::new();
     let mut unreachable = false;
-    for registry in &config.registries {
-        match install::load_index(registry).await {
-            Ok(index) => indexes.push(index),
-            Err(_) => unreachable = true,
+    if !installed.is_empty() {
+        for registry in &config.registries {
+            match install::load_index(registry).await {
+                Ok(index) => indexes.push(index),
+                Err(_) => unreachable = true,
+            }
         }
     }
     for (name, version) in installed {
@@ -149,6 +149,7 @@ async fn list(
             display_safe(&version)
         )?;
     }
+    writeln!(out, "{LOCAL}  {}", t(msg::CLI_BUILTIN))?;
     Ok(())
 }
 

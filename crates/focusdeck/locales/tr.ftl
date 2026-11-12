@@ -99,6 +99,7 @@ cli-in-use-warning = uyarı: { $profile } profili bu plugin'i kullanıyor
 cli-latest = (dizinde: { $version })
 cli-not-in-registry = (dizinde: yok)
 cli-registry-unreachable = dizine ulaşılamadı
+cli-builtin = (yerleşik)
 
 error-prefix = hata:
 error-duration-invalid = geçersiz süre: { $value } (örnek: 90s, 2m, 1h)
@@ -150,6 +151,8 @@ install-chmod-failed = plugin çalıştırılabilir yapılamadı
 install-manifest-failed = manifest yazılamadı
 install-delete-failed = { $path } silinemedi
 install-not-installed = plugin kurulu değil: { $name }
+install-local-builtin = local focusdeck ile birlikte gelir, kurulacak bir şey yok
+install-local-not-removable = local focusdeck ile birlikte gelir, kaldırılamaz
 
 # Notification titles and bodies of "focusdeck capture" and the rofi prompt label.
 capture-prompt = Not

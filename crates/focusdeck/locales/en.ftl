@@ -99,6 +99,7 @@ cli-in-use-warning = warning: profile { $profile } uses this plugin
 cli-latest = (in registry: { $version })
 cli-not-in-registry = (in registry: none)
 cli-registry-unreachable = registry unreachable
+cli-builtin = (built-in)
 
 error-prefix = error:
 error-duration-invalid = invalid duration: { $value } (example: 90s, 2m, 1h)
@@ -150,6 +151,8 @@ install-chmod-failed = could not make the plugin executable
 install-manifest-failed = could not write the manifest
 install-delete-failed = could not delete { $path }
 install-not-installed = plugin is not installed: { $name }
+install-local-builtin = local comes with focusdeck, there is nothing to install
+install-local-not-removable = local comes with focusdeck and cannot be removed
 
 # Notification titles and bodies of "focusdeck capture" and the rofi prompt label.
 capture-prompt = Note

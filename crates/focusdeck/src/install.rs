@@ -1,4 +1,5 @@
 use crate::i18n::{msg, t, t_args};
+use crate::local::LOCAL;
 use anyhow::{Context, bail};
 use focusdeck_protocol::PROTOCOL_VERSION;
 use serde::{Deserialize, Serialize};
@@ -185,6 +186,9 @@ pub async fn install(
     plugin_dir: &Path,
 ) -> anyhow::Result<IndexEntry> {
     validate_name(name)?;
+    if name == LOCAL {
+        bail!(t(msg::INSTALL_LOCAL_BUILTIN));
+    }
     let mut failures = Vec::new();
     let mut found = None;
     for registry in registries {
@@ -331,8 +335,16 @@ pub fn installed(plugin_dir: &Path) -> Vec<(String, String)> {
     found
 }
 
-pub fn remove(plugin_dir: &Path, name: &str) -> anyhow::Result<()> {
+pub fn check_removable(name: &str) -> anyhow::Result<()> {
     validate_name(name)?;
+    if name == LOCAL {
+        bail!(t(msg::INSTALL_LOCAL_NOT_REMOVABLE));
+    }
+    Ok(())
+}
+
+pub fn remove(plugin_dir: &Path, name: &str) -> anyhow::Result<()> {
+    check_removable(name)?;
     let mut removed = false;
     for file in [name.to_string(), format!("{name}.toml")] {
         let path = plugin_dir.join(file);

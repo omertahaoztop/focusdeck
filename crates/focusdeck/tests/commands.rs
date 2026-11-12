@@ -632,6 +632,35 @@ fn local_notes(env: &Env) -> serde_json::Value {
 }
 
 #[test]
+fn plugin_list_names_local_as_built_in() {
+    let env = Env::standard();
+    assert_eq!(env.run(&["plugin", "list"]).stdout(), "local  (built-in)\n");
+    let tr = env.run_in(&["plugin", "list"], "tr_TR.UTF-8");
+    assert_eq!(tr.stdout(), "local  (yerleşik)\n");
+}
+
+#[test]
+fn plugin_install_local_is_refused_in_turkish() {
+    let env = Env::standard();
+    let ran = env.run_in(&["plugin", "install", "local"], "tr_TR.UTF-8");
+    assert_eq!(ran.code(), 1);
+    assert!(
+        ran.stderr()
+            .contains("local focusdeck ile birlikte gelir, kurulacak bir şey yok"),
+        "{}",
+        ran.stderr()
+    );
+    let ran = env.run_in(&["plugin", "remove", "local"], "tr_TR.UTF-8");
+    assert_eq!(ran.code(), 1);
+    assert!(
+        ran.stderr()
+            .contains("local focusdeck ile birlikte gelir, kaldırılamaz"),
+        "{}",
+        ran.stderr()
+    );
+}
+
+#[test]
 fn capture_into_a_local_box_needs_no_plugin() {
     let env = Env::new(LOCAL_PROFILE);
     std::fs::remove_file(env.dir.path().join("data/plugins/vikunja")).unwrap();

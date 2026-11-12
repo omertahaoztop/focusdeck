@@ -278,6 +278,87 @@ async fn unsafe_names_are_rejected_before_any_io() {
 }
 
 #[tokio::test]
+async fn local_is_reserved_before_any_io() {
+    let mut server = mockito::Server::new_async().await;
+    let index = server
+        .mock("GET", "/index.toml")
+        .expect(0)
+        .create_async()
+        .await;
+    let plugins = tempfile::tempdir().unwrap();
+    let plugin_dir: PathBuf = plugins.path().join("plugins");
+    let err = install::install(
+        &[format!("{}/index.toml", server.url())],
+        "local",
+        &plugin_dir,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "local comes with focusdeck, there is nothing to install"
+    );
+    let err = install::remove(&plugin_dir, "local").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "local comes with focusdeck and cannot be removed"
+    );
+    assert!(!plugin_dir.exists());
+    index.assert_async().await;
+}
+
+#[test]
+fn plugin_install_and_remove_refuse_local() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = test_paths(dir.path());
+    write_profile(&paths, "ev.toml", "ev", "local");
+    let (result, out, err) = run(
+        PluginCommand::Install {
+            name: "local".into(),
+        },
+        &paths,
+        vec!["http://127.0.0.1:1/index.toml".into()],
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("comes with focusdeck")
+    );
+    assert!(out.is_empty() && err.is_empty());
+    let (result, out, err) = run(
+        PluginCommand::Remove {
+            name: "local".into(),
+        },
+        &paths,
+        vec![],
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("comes with focusdeck")
+    );
+    assert!(out.is_empty() && err.is_empty(), "{out}{err}");
+    assert!(!paths.plugin_dir().exists());
+}
+
+#[test]
+fn plugin_list_puts_local_after_installed_plugins() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = test_paths(dir.path());
+    let plugins = paths.plugin_dir();
+    std::fs::create_dir_all(&plugins).unwrap();
+    std::fs::write(plugins.join("vikunja.toml"), "version = \"0.2.0\"\n").unwrap();
+    let (result, out, _) = run(PluginCommand::List, &paths, vec![]);
+    result.unwrap();
+    assert_eq!(
+        out,
+        "vikunja  0.2.0  (in registry: none)\nlocal  (built-in)\n"
+    );
+}
+
+#[tokio::test]
 async fn index_entry_url_with_unsupported_scheme_is_error() {
     let reg = tempfile::tempdir().unwrap();
     let plugins = tempfile::tempdir().unwrap();
@@ -427,7 +508,7 @@ fn plugin_list_is_empty_without_network() {
         vec!["http://127.0.0.1:1/index.toml".into()],
     );
     result.unwrap();
-    assert!(out.is_empty());
+    assert_eq!(out, "local  (built-in)\n");
     assert!(err.is_empty());
 }
 
@@ -450,7 +531,10 @@ fn plugin_install_list_remove_flow() {
 
     let (result, out, _) = run(PluginCommand::List, &paths, regs.clone());
     result.unwrap();
-    assert_eq!(out, "redmine  0.1.0  (in registry: 0.1.0)\n");
+    assert_eq!(
+        out,
+        "redmine  0.1.0  (in registry: 0.1.0)\nlocal  (built-in)\n"
+    );
 
     let (result, out, _) = run(
         PluginCommand::List,
@@ -458,7 +542,10 @@ fn plugin_install_list_remove_flow() {
         vec![reg_url(&reg.path().join("yok"))],
     );
     result.unwrap();
-    assert_eq!(out, "redmine  0.1.0  registry unreachable\n");
+    assert_eq!(
+        out,
+        "redmine  0.1.0  registry unreachable\nlocal  (built-in)\n"
+    );
 
     write_profile(&paths, "is.toml", "iş", "redmine");
     write_profile(&paths, "ev.toml", "ev", "vikunja");
