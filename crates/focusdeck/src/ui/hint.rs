@@ -1,4 +1,5 @@
 use super::app::{App, BoxState, DropPlan, Mode};
+use crate::i18n::{msg, t, t_args};
 
 fn has_action(state: &BoxState, action: &str) -> bool {
     state
@@ -7,7 +8,7 @@ fn has_action(state: &BoxState, action: &str) -> bool {
         .is_some_and(|d| d.actions.iter().any(|a| a == action))
 }
 
-fn join(parts: Vec<&str>) -> String {
+fn join(parts: Vec<String>) -> String {
     parts.join(" · ")
 }
 
@@ -18,41 +19,50 @@ pub fn text(app: &App) -> String {
     match &app.mode {
         Mode::Board => board(app),
         Mode::Zoom(idx) => zoom(app, *idx),
-        Mode::Capture { .. } => {
-            "Enter kaydet · Esc vazgeç · @kişi #etiket R123 · sonda 14:30, yarın 09:00, 30dk".into()
-        }
-        Mode::MovePicker { .. } => "1-9 hedef kutu · Esc vazgeç".into(),
-        Mode::Search { .. } => "yaz ara · Enter tamam · Esc temizle".into(),
-        Mode::Help => "Esc kapat".into(),
+        Mode::Capture { .. } => t(msg::HINT_CAPTURE),
+        Mode::MovePicker { .. } => t(msg::HINT_PICKER),
+        Mode::Search { .. } => t(msg::HINT_SEARCH),
+        Mode::Help => t(msg::HINT_HELP),
     }
 }
 
 fn dragging(app: &App, plan: DropPlan) -> String {
-    let title = |idx: usize| &app.boxes[idx].spec.title;
+    let title = |idx: usize| app.boxes[idx].spec.title.as_str();
     let what = match plan {
-        DropPlan::Into(idx) => format!("bırak: {}", title(idx)),
-        DropPlan::Reorder { row, .. } => format!("bırak: {}. sıra", row + 1),
-        DropPlan::Rejected(idx) => format!("{} kabul etmiyor", title(idx)),
-        DropPlan::Nothing => "bırakırsan bir şey olmaz".to_owned(),
+        DropPlan::Into(idx) => t_args(msg::DRAG_INTO, &[("title", title(idx).into())]),
+        DropPlan::Reorder { row, .. } => t_args(msg::DRAG_REORDER, &[("row", (row + 1).into())]),
+        DropPlan::Rejected(idx) => t_args(msg::DRAG_REJECTED, &[("title", title(idx).into())]),
+        DropPlan::Nothing => t(msg::DRAG_NOTHING),
     };
-    format!("{what} · Esc vazgeç")
+    t_args(msg::DRAG_CANCEL, &[("what", what.as_str().into())])
 }
 
-fn action_hints(state: &BoxState, parts: &mut Vec<&'static str>) {
+fn action_hints(state: &BoxState, parts: &mut Vec<String>) {
     if has_action(state, "done") {
-        parts.push("x bitti");
+        parts.push(t(msg::HINT_ACTION_DONE));
     }
     if has_action(state, "unstar") {
-        parts.push("u yıldızı kaldır");
+        parts.push(t(msg::HINT_ACTION_UNSTAR));
     }
 }
 
 fn board(app: &App) -> String {
-    let mut parts = vec!["a not al", "tıkla seç", "çift tıkla büyüt", "sürükle taşı"];
+    let mut parts = vec![
+        t(msg::HINT_BOARD_NOTE),
+        t(msg::HINT_BOARD_SELECT),
+        t(msg::HINT_BOARD_ZOOM),
+        t(msg::HINT_BOARD_DRAG),
+    ];
     if let Some(state) = app.boxes.get(app.focus) {
         action_hints(state, &mut parts);
     }
-    parts.extend(["o aç", "m taşı", "Tab kutu", "? yardım", "q çık"]);
+    parts.extend([
+        t(msg::HINT_OPEN),
+        t(msg::HINT_MOVE),
+        t(msg::HINT_BOARD_BOX),
+        t(msg::HINT_BOARD_HELP),
+        t(msg::HINT_BOARD_QUIT),
+    ]);
     join(parts)
 }
 
@@ -60,11 +70,16 @@ fn zoom(app: &App, idx: usize) -> String {
     let mut parts = Vec::new();
     if let Some(state) = app.boxes.get(idx) {
         if state.spec.plan_into.is_some() {
-            parts.push("boşluk planıma al");
+            parts.push(t(msg::HINT_ZOOM_PLAN));
         }
         action_hints(state, &mut parts);
     }
-    parts.extend(["o aç", "/ ara", "m taşı", "Esc geri"]);
+    parts.extend([
+        t(msg::HINT_OPEN),
+        t(msg::HINT_ZOOM_SEARCH),
+        t(msg::HINT_MOVE),
+        t(msg::HINT_ZOOM_BACK),
+    ]);
     join(parts)
 }
 
@@ -76,7 +91,7 @@ mod tests {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use std::time::Instant;
 
-    const TAIL: &str = "o aç · m taşı · Tab kutu · ? yardım · q çık";
+    const TAIL: &str = "o open · m move · Tab box · ? help · q quit";
 
     #[test]
     fn board_hint_per_focused_box() {
@@ -84,19 +99,17 @@ mod tests {
         app.focus = SOZLU;
         assert_eq!(
             text(&app),
-            format!("a not al · tıkla seç · çift tıkla büyüt · sürükle taşı · x bitti · {TAIL}")
+            format!("a note · click select · double click zoom · drag move · x done · {TAIL}")
         );
         app.focus = REDMINE;
         assert_eq!(
             text(&app),
-            format!("a not al · tıkla seç · çift tıkla büyüt · sürükle taşı · {TAIL}")
+            format!("a note · click select · double click zoom · drag move · {TAIL}")
         );
         app.focus = ZULIP;
         assert_eq!(
             text(&app),
-            format!(
-                "a not al · tıkla seç · çift tıkla büyüt · sürükle taşı · u yıldızı kaldır · {TAIL}"
-            )
+            format!("a note · click select · double click zoom · drag move · u unstar · {TAIL}")
         );
     }
 
@@ -106,12 +119,12 @@ mod tests {
         app.mode = Mode::Zoom(REDMINE);
         assert_eq!(
             text(&app),
-            "boşluk planıma al · o aç · / ara · m taşı · Esc geri"
+            "space add to plan · o open · / search · m move · Esc back"
         );
         app.mode = Mode::Zoom(ZULIP);
         assert_eq!(
             text(&app),
-            "u yıldızı kaldır · o aç · / ara · m taşı · Esc geri"
+            "u unstar · o open · / search · m move · Esc back"
         );
     }
 
@@ -123,18 +136,18 @@ mod tests {
         };
         assert_eq!(
             text(&app),
-            "Enter kaydet · Esc vazgeç · @kişi #etiket R123 · sonda 14:30, yarın 09:00, 30dk"
+            "Enter save · Esc cancel · @person #label R123 · at the end 14:30, tomorrow 09:00, 30min"
         );
         app.mode = Mode::MovePicker {
             from: ZULIP,
             item: "z1".into(),
         };
-        assert_eq!(text(&app), "1-9 hedef kutu · Esc vazgeç");
+        assert_eq!(text(&app), "1-9 target box · Esc cancel");
         app.mode = Mode::Search {
             zoom: REDMINE,
             query: String::new(),
         };
-        assert_eq!(text(&app), "yaz ara · Enter tamam · Esc temizle");
+        assert_eq!(text(&app), "type to search · Enter done · Esc clear");
     }
 
     #[test]
@@ -142,7 +155,7 @@ mod tests {
         let app = App::new(&profile());
         assert_eq!(
             text(&app),
-            format!("a not al · tıkla seç · çift tıkla büyüt · sürükle taşı · {TAIL}")
+            format!("a note · click select · double click zoom · drag move · {TAIL}")
         );
     }
 
@@ -177,7 +190,7 @@ mod tests {
                 row: Some(1),
             },
         );
-        assert_eq!(text(&app), "bırak: sozlu · Esc vazgeç");
+        assert_eq!(text(&app), "drop: sozlu · Esc cancel");
         hover(
             &mut app,
             drag,
@@ -186,7 +199,7 @@ mod tests {
                 row: None,
             },
         );
-        assert_eq!(text(&app), "redmine kabul etmiyor · Esc vazgeç");
+        assert_eq!(text(&app), "redmine does not accept · Esc cancel");
         hover(
             &mut app,
             drag,
@@ -195,7 +208,7 @@ mod tests {
                 row: Some(1),
             },
         );
-        assert_eq!(text(&app), "bırakırsan bir şey olmaz · Esc vazgeç");
+        assert_eq!(text(&app), "nothing happens if you drop · Esc cancel");
 
         let mut app = loaded_app();
         hover(
@@ -214,6 +227,6 @@ mod tests {
                 row: Some(2),
             },
         );
-        assert_eq!(text(&app), "bırak: 3. sıra · Esc vazgeç");
+        assert_eq!(text(&app), "drop: row 3 · Esc cancel");
     }
 }

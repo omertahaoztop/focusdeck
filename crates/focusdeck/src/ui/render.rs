@@ -11,19 +11,20 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use super::app::{App, BoxState, Drag, DropPlan, Mode};
 use super::{hint, layout};
 use crate::cli::display_safe;
+use crate::i18n::{msg, t, t_args};
 use focusdeck_protocol::Item;
 
 const HELP: [&str; 10] = [
-    "a  not al (capture_into kutusuna)",
-    "x  seçili öğe bitti",
-    "u  yıldızı kaldır",
-    "m  başka kutuya taşı",
-    "boşluk  planıma al / çıkar (büyütülmüş kutu)",
-    "o  linki tarayıcıda aç",
-    "/  ara (büyütülmüş kutu)",
-    "Tab  sonraki kutu",
-    "Enter  kutuyu büyüt · Esc geri",
-    "q  çık",
+    msg::HELP_NOTE,
+    msg::HELP_DONE,
+    msg::HELP_UNSTAR,
+    msg::HELP_MOVE,
+    msg::HELP_PLAN,
+    msg::HELP_OPEN,
+    msg::HELP_SEARCH,
+    msg::HELP_NEXT,
+    msg::HELP_ZOOM,
+    msg::HELP_QUIT,
 ];
 
 /// Cuts to a display width, ending in `…` when anything was removed.
@@ -81,8 +82,11 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: DateTime<Local>) {
 
 fn status_line(app: &App, now: DateTime<Local>, width: u16) -> Line<'static> {
     let refreshed = app.refreshed_at.map_or_else(
-        || "yenilenmedi".to_owned(),
-        |t| format!("yenilendi {}", t.format("%H:%M:%S")),
+        || t(msg::STATUS_NOT_REFRESHED),
+        |at| {
+            let time = at.format("%H:%M:%S").to_string();
+            t_args(msg::STATUS_REFRESHED, &[("time", time.as_str().into())])
+        },
     );
     let head = format!(
         "focusdeck · {} · {} · {refreshed}",
@@ -125,12 +129,18 @@ fn box_title(app: &App, idx: usize, now: DateTime<Local>) -> String {
     let visible = app.visible(idx);
     let overdue = visible.iter().filter(|i| is_overdue(i, now)).count();
     let counts = match app.planned_count(idx) {
-        Some((planned, total)) if app.zoomed_box() != Some(idx) => format!("{planned} / {total}"),
-        _ => visible.len().to_string(),
+        Some((planned, total)) if app.zoomed_box() != Some(idx) => t_args(
+            msg::BOX_PLANNED,
+            &[("planned", planned.into()), ("total", total.into())],
+        ),
+        _ => t_args(msg::BOX_COUNT, &[("total", visible.len().into())]),
     };
     let mut title = format!("{} {counts}", display_safe(&state.spec.title));
     if overdue > 0 {
-        title.push_str(&format!(" · {overdue} gecikmiş"));
+        title.push_str(&format!(
+            " · {}",
+            t_args(msg::BOX_OVERDUE, &[("count", overdue.into())])
+        ));
     }
     if let Mode::Search { zoom, query } = &app.mode
         && *zoom == idx
@@ -222,10 +232,11 @@ fn draw_box(
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     if let Some(error) = &state.error {
-        let text = truncate(
-            &format!("hata: {}", display_safe(error)),
-            usize::from(inner.width),
+        let message = t_args(
+            msg::BOX_ERROR,
+            &[("message", display_safe(error).as_str().into())],
         );
+        let text = truncate(&message, usize::from(inner.width));
         let row = Rect::new(inner.x, inner.y, inner.width, inner.height.min(1));
         frame.render_widget(Paragraph::new(text).style(Style::new().fg(Color::Red)), row);
     }
@@ -328,7 +339,7 @@ fn draw_capture(frame: &mut Frame, body: Rect, input: &str) {
         .last()
         .map_or(input.len(), |(at, _)| at);
     let shown = format!("{}▏", display_safe(&input[tail_start..]));
-    draw_overlay(frame, area, "Not al", vec![Line::from(shown)]);
+    draw_overlay(frame, area, &t(msg::CAPTURE_TITLE), vec![Line::from(shown)]);
 }
 
 fn draw_picker(frame: &mut Frame, app: &App, body: Rect, from: usize) {
@@ -346,13 +357,13 @@ fn draw_picker(frame: &mut Frame, app: &App, body: Rect, from: usize) {
         })
         .collect();
     let area = centered(body, body.width.min(40), lines.len() as u16 + 2);
-    draw_overlay(frame, area, "Nereye taşınsın", lines);
+    draw_overlay(frame, area, &t(msg::PICKER_TITLE), lines);
 }
 
 fn draw_help(frame: &mut Frame, body: Rect) {
-    let lines: Vec<Line> = HELP.iter().map(|l| Line::from(*l)).collect();
+    let lines: Vec<Line> = HELP.iter().map(|id| Line::from(t(id))).collect();
     let area = centered(body, body.width.min(60), HELP.len() as u16 + 2);
-    draw_overlay(frame, area, "Tuşlar", lines);
+    draw_overlay(frame, area, &t(msg::HELP_TITLE), lines);
 }
 
 #[cfg(test)]
@@ -361,6 +372,7 @@ mod tests {
     use super::super::app::testkit::*;
     use super::super::hint;
     use super::*;
+    use crate::i18n::{self, msg};
     use chrono::{Duration, TimeZone};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::Terminal;
@@ -443,7 +455,7 @@ mod tests {
         let mut app = board();
         app.boxes[SOZLU].items[0].due = Some((now() - Duration::hours(3)).fixed_offset());
         let term = render(&app, 120, 40);
-        find(&term, "Sözlü işler 3 · 1 gecikmiş");
+        find(&term, "Sözlü işler 3 · 1 overdue");
     }
 
     #[test]
@@ -468,7 +480,7 @@ mod tests {
         let mut app = board();
         app.boxes[ZULIP].error = Some("plugin kapandı".into());
         let term = render(&app, 120, 40);
-        let (x, y) = find(&term, "hata: plugin kapandı");
+        let (x, y) = find(&term, "error: plugin kapandı");
         let buf = term.backend().buffer();
         assert_eq!(buf[(x, y)].fg, Color::Red);
         let (ix, iy) = find(&term, "zulip mesajı");
@@ -493,7 +505,7 @@ mod tests {
         let mut app = board();
         app.boxes[ZULIP].items[0].overdue = true;
         let term = render(&app, 120, 40);
-        find(&term, "zulip 2 · 1 gecikmiş");
+        find(&term, "zulip 2 · 1 overdue");
     }
 
     #[test]
@@ -516,14 +528,65 @@ mod tests {
         assert_eq!(rows[39].trim_end(), hint::text(&app));
         assert!(rows[0].starts_with("focusdeck · iş · "), "{}", rows[0]);
         assert!(rows[0].contains("14:32"));
+        assert!(rows[0].contains(" · refreshed "), "{}", rows[0]);
+    }
+
+    #[test]
+    fn status_line_says_when_nothing_was_loaded_yet() {
+        let term = render(&App::new(&profile()), 120, 40);
+        assert!(rows(&term)[0].contains("not refreshed yet"));
+    }
+
+    #[test]
+    fn overlays_carry_their_titles() {
+        let mut app = board();
+        app.mode = Mode::Help;
+        find(&render(&app, 120, 40), "Keys");
+        let help = rows(&render(&app, 120, 40)).join("\n");
+        assert!(help.contains("a  take a note (into the capture_into box)"));
+        assert!(help.contains("q  quit"));
+        app.mode = Mode::Capture {
+            input: String::new(),
+        };
+        find(&render(&app, 120, 40), "Note");
+        app.mode = Mode::MovePicker {
+            from: ZULIP,
+            item: "z1".into(),
+        };
+        find(&render(&app, 120, 40), "Move to");
+    }
+
+    #[test]
+    fn tr_ui_texts_unchanged() {
+        let tr = i18n::localizer(Some("tr"));
+        assert_eq!(tr.t(msg::HINT_BOARD_NOTE), "a not al");
+        assert_eq!(tr.t(msg::PICKER_TITLE), "Nereye taşınsın");
+        assert_eq!(
+            tr.t_args(msg::BOX_OVERDUE, &[("count", 2.into())]),
+            "2 gecikmiş"
+        );
+        assert_eq!(tr.t(msg::HELP_TITLE), "Tuşlar");
+    }
+
+    #[test]
+    fn en_overdue_plural() {
+        let en = i18n::localizer(None);
+        assert_eq!(
+            en.t_args(msg::BOX_OVERDUE, &[("count", 1.into())]),
+            "1 overdue"
+        );
+        assert_eq!(
+            en.t_args(msg::BOX_OVERDUE, &[("count", 3.into())]),
+            "3 overdue"
+        );
     }
 
     #[test]
     fn flash_shows_on_the_top_row() {
         let mut app = board();
-        app.flash = Some("bu öğenin linki yok".into());
+        app.flash = Some("this item has no link".into());
         let term = render(&app, 120, 40);
-        assert!(rows(&term)[0].contains("bu öğenin linki yok"));
+        assert!(rows(&term)[0].contains("this item has no link"));
     }
 
     #[test]

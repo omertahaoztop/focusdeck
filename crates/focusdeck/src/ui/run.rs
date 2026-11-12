@@ -26,6 +26,7 @@ use super::{layout, render};
 use crate::capture;
 use crate::config::Config;
 use crate::host::PluginHost;
+use crate::i18n::{msg, t, t_args};
 use crate::install;
 use crate::paths::Paths;
 use crate::profile::Profile;
@@ -56,9 +57,9 @@ fn enter_terminal() -> anyhow::Result<(Term, TerminalGuard)> {
         previous(info);
     }));
     let guard = TerminalGuard;
-    enable_raw_mode().context("terminal ham kipe alınamadı")?;
+    enable_raw_mode().with_context(|| t(msg::TERMINAL_RAW_MODE))?;
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
-        .context("alternatif ekrana geçilemedi")?;
+        .with_context(|| t(msg::TERMINAL_ALT_SCREEN))?;
     let term = Terminal::new(CrosstermBackend::new(stdout()))?;
     Ok((term, guard))
 }
@@ -95,14 +96,13 @@ impl Runtime<'_> {
             .get(idx)
             .map(|b| b.spec.title.clone())
             .unwrap_or_default();
+        let flash = |id: &str| t_args(id, &[("title", title.as_str().into())]);
         match self.cmds.get(idx).and_then(Option::as_ref) {
-            None => app.flash = Some(format!("{title} kutusu açık değil")),
+            None => app.flash = Some(flash(msg::FLASH_BOX_CLOSED)),
             Some(tx) => match tx.try_send(cmd) {
                 Ok(()) => {}
-                Err(TrySendError::Full(_)) => app.flash = Some(format!("{title} kutusu meşgul")),
-                Err(TrySendError::Closed(_)) => {
-                    app.flash = Some(format!("{title} kutusunun plugin görevi durdu"));
-                }
+                Err(TrySendError::Full(_)) => app.flash = Some(flash(msg::FLASH_BOX_BUSY)),
+                Err(TrySendError::Closed(_)) => app.flash = Some(flash(msg::FLASH_BOX_STOPPED)),
             },
         }
     }
@@ -134,7 +134,7 @@ impl Runtime<'_> {
             .as_deref()
             .and_then(|id| self.profile.box_index(id))
         else {
-            app.flash = Some("profilde capture_into yok".into());
+            app.flash = Some(t(msg::FLASH_NO_CAPTURE_INTO));
             return;
         };
         let now = Local::now().fixed_offset();
@@ -152,7 +152,12 @@ impl Runtime<'_> {
                     from: None,
                 },
             ),
-            Err(message) => app.flash = Some(format!("not eklenemedi: {message}")),
+            Err(message) => {
+                app.flash = Some(t_args(
+                    msg::FLASH_CAPTURE_FAILED,
+                    &[("message", message.as_str().into())],
+                ));
+            }
         }
     }
 
@@ -188,7 +193,12 @@ fn open_url(app: &mut App, url: &str) {
                 let _ = child.wait().await;
             });
         }
-        Err(e) => app.flash = Some(format!("xdg-open başlatılamadı: {e}")),
+        Err(e) => {
+            app.flash = Some(t_args(
+                msg::FLASH_OPEN_FAILED,
+                &[("error", e.to_string().as_str().into())],
+            ));
+        }
     }
 }
 
@@ -285,7 +295,7 @@ async fn event_loop(
                     app.on_mouse(mouse, Instant::now(), |_, _| target)
                 }
                 Some(Ok(_)) => Vec::new(),
-                Some(Err(e)) => return Err(e).context("terminal olayı okunamadı"),
+                Some(Err(e)) => return Err(e).with_context(|| t(msg::TERMINAL_EVENT)),
                 None => return Ok(()),
             },
             Some(ev) = event_rx.recv() => {

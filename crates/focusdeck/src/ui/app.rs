@@ -1,3 +1,4 @@
+use crate::i18n::{msg, t, t_args};
 use crate::links::{items_to_close, linked_ids, linked_item};
 use crate::profile::{BoxSpec, Profile};
 use crate::worker::BoxEvent;
@@ -359,7 +360,13 @@ impl App {
                     vec![Effect::Refresh(idx, view)]
                 }
                 Err(message) => {
-                    self.flash = Some(format!("{what} başarısız: {message}"));
+                    self.flash = Some(t_args(
+                        msg::FLASH_ACTION_FAILED,
+                        &[
+                            ("what", what.as_str().into()),
+                            ("message", message.as_str().into()),
+                        ],
+                    ));
                     Vec::new()
                 }
             },
@@ -454,10 +461,8 @@ impl App {
                 };
                 Vec::new()
             }
-            KeyCode::Char('x') => self.require_action(idx, "done", "bu kutuda bitirme yok"),
-            KeyCode::Char('u') => {
-                self.require_action(idx, "unstar", "bu kutuda yıldız kaldırma yok")
-            }
+            KeyCode::Char('x') => self.require_action(idx, "done", msg::FLASH_NO_DONE),
+            KeyCode::Char('u') => self.require_action(idx, "unstar", msg::FLASH_NO_UNSTAR),
             KeyCode::Char('o') => self.open_selected(idx),
             KeyCode::Char('m') => {
                 if let Some(item) = self.selected_item(idx) {
@@ -473,9 +478,9 @@ impl App {
         }
     }
 
-    fn require_action(&mut self, idx: usize, action: &str, missing: &str) -> Vec<Effect> {
+    fn require_action(&mut self, idx: usize, action: &str, missing_msg: &str) -> Vec<Effect> {
         if !has_action(&self.boxes[idx], action) {
-            self.flash = Some(missing.to_owned());
+            self.flash = Some(t(missing_msg));
             return Vec::new();
         }
         match self.selected_item(idx) {
@@ -491,7 +496,7 @@ impl App {
         match item.url {
             Some(url) => vec![Effect::Open(url)],
             None => {
-                self.flash = Some("bu öğenin linki yok".into());
+                self.flash = Some(t(msg::FLASH_NO_LINK));
                 Vec::new()
             }
         }
@@ -723,9 +728,9 @@ impl App {
                 item,
             }],
             DropPlan::Rejected(idx) => {
-                self.flash = Some(format!(
-                    "{} kutusu bırakılan öğe kabul etmiyor",
-                    self.boxes[idx].spec.title
+                self.flash = Some(t_args(
+                    msg::FLASH_DROP_REJECTED,
+                    &[("title", self.boxes[idx].spec.title.as_str().into())],
                 ));
                 Vec::new()
             }
@@ -1031,7 +1036,7 @@ mod tests {
             result: Err("sunucu hatası".into()),
         });
         assert!(effects.is_empty());
-        assert!(app.flash.as_deref().unwrap().contains("sunucu hatası"));
+        assert_eq!(app.flash.as_deref(), Some("done failed: sunucu hatası"));
     }
 
     #[test]
@@ -1097,7 +1102,7 @@ mod tests {
         );
         app.focus = ZULIP;
         assert!(app.on_key(key('x')).is_empty());
-        assert_eq!(app.flash.as_deref(), Some("bu kutuda bitirme yok"));
+        assert_eq!(app.flash.as_deref(), Some("this box has no done action"));
     }
 
     #[test]
@@ -1126,7 +1131,7 @@ mod tests {
         );
         app.on_key(code(KeyCode::Down));
         assert!(app.on_key(key('o')).is_empty());
-        assert_eq!(app.flash.as_deref(), Some("bu öğenin linki yok"));
+        assert_eq!(app.flash.as_deref(), Some("this item has no link"));
     }
 
     #[test]
@@ -1459,7 +1464,7 @@ mod tests {
         assert!(up(&mut app, 11, 1, t).is_empty());
         assert_eq!(
             app.flash.as_deref(),
-            Some("redmine kutusu bırakılan öğe kabul etmiyor")
+            Some("redmine box does not accept the dropped item")
         );
     }
 
