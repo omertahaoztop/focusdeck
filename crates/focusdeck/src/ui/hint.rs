@@ -73,7 +73,7 @@ fn zoom(app: &App, idx: usize) -> String {
             parts.push(t(msg::HINT_ZOOM_PLAN));
         }
         action_hints(state, &mut parts);
-        if has_action(state, "reorder") && app.active_filter(idx).is_none() {
+        if has_action(state, "reorder") {
             parts.push(t(msg::HINT_ZOOM_REORDER));
         }
     }
@@ -91,7 +91,9 @@ mod tests {
     use super::super::app::Hit;
     use super::super::app::testkit::*;
     use super::*;
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use std::time::Instant;
 
     const HEAD: &str = "? help · q quit · a note";
@@ -133,6 +135,17 @@ mod tests {
             text(&app),
             "u unstar · o open · / search · m move · Esc back"
         );
+    }
+
+    #[test]
+    fn zoom_hint_keeps_reorder_under_a_filter() {
+        let mut app = loaded_app();
+        app.mode = Mode::Zoom(SOZLU);
+        for code in [KeyCode::Char('/'), KeyCode::Char('s'), KeyCode::Enter] {
+            app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        }
+        assert_eq!(app.active_filter(SOZLU), Some("s"));
+        assert!(text(&app).contains("Shift+↑↓ reorder"), "{}", text(&app));
     }
 
     #[test]
