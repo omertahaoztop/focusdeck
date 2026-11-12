@@ -47,7 +47,7 @@ help-move = m  başka kutuya taşı
 help-plan = boşluk  planıma al / çıkar (büyütülmüş kutu)
 help-open = o  linki tarayıcıda aç
 help-search = /  ara (büyütülmüş kutu)
-help-next = Tab  sonraki kutu
+help-next = Tab, oklar  kutu değiştir (↑↓ liste ucunda)
 help-zoom = Enter  kutuyu büyüt · Esc geri
 help-quit = q  çık
 

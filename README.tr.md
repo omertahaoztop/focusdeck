@@ -102,6 +102,8 @@ Ana ekranda profildeki kutular ızgarada durur. Kutu başlığı öğe sayısın
 | `o` | linki tarayıcıda aç | aynı |
 | `/` | yok | ara |
 | `Tab` | sonraki kutu | yok |
+| `←` `→` | soldaki / sağdaki kutu | yok |
+| `↑` `↓` | listede gezin, en üstte / en altta üstteki / alttaki kutuya geç | listede gezin |
 | `?`, `q`, `Esc` | yardım, çık, geri | yardım, çık, geri |
 
 Fare:

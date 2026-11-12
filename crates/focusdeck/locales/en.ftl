@@ -47,7 +47,7 @@ help-move = m  move to another box
 help-plan = space  add to / remove from plan (zoomed box)
 help-open = o  open the link in the browser
 help-search = /  search (zoomed box)
-help-next = Tab  next box
+help-next = Tab, arrows  switch box (↑↓ at the list edge)
 help-zoom = Enter  zoom the box · Esc back
 help-quit = q  quit
 

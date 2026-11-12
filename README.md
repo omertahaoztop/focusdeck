@@ -102,6 +102,8 @@ The main screen shows the profile's boxes in a grid. A box title shows its item 
 | `o` | open the link in the browser | same |
 | `/` | none | search |
 | `Tab` | next box | none |
+| `←` `→` | box to the left / right | none |
+| `↑` `↓` | move in the list, at its top / bottom edge go to the box above / below | move in the list |
 | `?`, `q`, `Esc` | help, quit, back | help, quit, back |
 
 Mouse:

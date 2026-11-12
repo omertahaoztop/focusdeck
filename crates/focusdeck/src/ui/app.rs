@@ -32,6 +32,14 @@ pub enum Mode {
     Help,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Dir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
     pub box_idx: usize,
@@ -303,6 +311,54 @@ impl App {
         state.scroll = state.scroll.min(state.selected);
     }
 
+    fn step_or_leave(&mut self, idx: usize, down: bool) {
+        let last = self.visible(idx).len().saturating_sub(1);
+        let selected = self.boxes[idx].selected;
+        let at_edge = if down {
+            selected >= last
+        } else {
+            selected == 0
+        };
+        let dir = if down { Dir::Down } else { Dir::Up };
+        match self.neighbor(idx, dir).filter(|_| at_edge) {
+            Some(next) => self.focus = next,
+            None => self.step(idx, down),
+        }
+    }
+
+    fn neighbor(&self, idx: usize, dir: Dir) -> Option<usize> {
+        let vertical = matches!(dir, Dir::Up | Dir::Down);
+        let span = |b: &BoxSpec, rows: bool| {
+            let (start, len) = if rows {
+                (b.row, b.height)
+            } else {
+                (b.col, b.width)
+            };
+            (u32::from(start), u32::from(start) + u32::from(len))
+        };
+        let from = &self.boxes.get(idx)?.spec;
+        let (lo, hi) = span(from, vertical);
+        let (cross_lo, cross_hi) = span(from, !vertical);
+        self.boxes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != idx)
+            .filter_map(|(i, b)| {
+                let (b_lo, b_hi) = span(&b.spec, vertical);
+                let (b_cross_lo, b_cross_hi) = span(&b.spec, !vertical);
+                if b_cross_lo >= cross_hi || b_cross_hi <= cross_lo {
+                    return None;
+                }
+                let gap = match dir {
+                    Dir::Right | Dir::Down => b_lo.checked_sub(hi)?,
+                    Dir::Left | Dir::Up => lo.checked_sub(b_hi)?,
+                };
+                Some(((gap, b_cross_lo.abs_diff(cross_lo)), i))
+            })
+            .min()
+            .map(|(_, i)| i)
+    }
+
     fn scroll_wheel(&mut self, idx: usize, down: bool) {
         let len = self.visible(idx).len();
         let state = &mut self.boxes[idx];
@@ -449,12 +505,23 @@ impl App {
                 self.focus = (idx + 1) % self.boxes.len();
                 Vec::new()
             }
-            KeyCode::Down => {
-                self.step(idx, true);
+            KeyCode::Left | KeyCode::Right if !zoomed => {
+                let dir = if key.code == KeyCode::Left {
+                    Dir::Left
+                } else {
+                    Dir::Right
+                };
+                if let Some(next) = self.neighbor(idx, dir) {
+                    self.focus = next;
+                }
                 Vec::new()
             }
-            KeyCode::Up => {
-                self.step(idx, false);
+            KeyCode::Down | KeyCode::Up if zoomed => {
+                self.step(idx, key.code == KeyCode::Down);
+                Vec::new()
+            }
+            KeyCode::Down | KeyCode::Up => {
+                self.step_or_leave(idx, key.code == KeyCode::Down);
                 Vec::new()
             }
             KeyCode::Enter if !zoomed => self.zoom(idx),
@@ -762,7 +829,7 @@ pub(crate) mod testkit {
     pub const REDMINE: usize = 1;
     pub const ZULIP: usize = 2;
 
-    fn spec(id: &str, plugin: &str, plan_into: Option<&str>) -> BoxSpec {
+    pub fn spec(id: &str, plugin: &str, plan_into: Option<&str>) -> BoxSpec {
         BoxSpec {
             id: id.into(),
             title: id.into(),
@@ -889,6 +956,7 @@ pub(crate) mod testkit {
 mod tests {
     use super::testkit::*;
     use super::*;
+    use crate::profile::{BoxSpec, Profile};
     use crate::worker::BoxEvent;
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -1330,6 +1398,90 @@ mod tests {
         assert!(app.on_key(key('x')).is_empty());
         assert!(app.on_key(key('o')).is_empty());
         assert!(app.on_key(key('m')).is_empty());
+    }
+
+    fn grid_app(cells: &[(u16, u16, u16)]) -> App {
+        let boxes = cells
+            .iter()
+            .enumerate()
+            .map(|(i, &(row, col, width))| BoxSpec {
+                row,
+                col,
+                width,
+                ..spec(&format!("b{i}"), "vikunja", None)
+            })
+            .collect();
+        App::new(&Profile { boxes, ..profile() })
+    }
+
+    const TWO_BY_THREE: [(u16, u16, u16); 6] = [
+        (0, 0, 1),
+        (0, 1, 1),
+        (0, 2, 1),
+        (1, 0, 1),
+        (1, 1, 1),
+        (1, 2, 1),
+    ];
+
+    #[test]
+    fn left_right_switch_columns_without_wrapping() {
+        let mut app = grid_app(&TWO_BY_THREE);
+        app.on_key(code(KeyCode::Right));
+        assert_eq!(app.focus, 1);
+        app.on_key(code(KeyCode::Right));
+        app.on_key(code(KeyCode::Right));
+        assert_eq!(app.focus, 2);
+        app.on_key(code(KeyCode::Left));
+        assert_eq!(app.focus, 1);
+        app.focus = 3;
+        app.on_key(code(KeyCode::Left));
+        assert_eq!(app.focus, 3);
+    }
+
+    #[test]
+    fn up_down_leave_the_box_only_at_its_edges() {
+        let mut app = grid_app(&TWO_BY_THREE);
+        list(
+            &mut app,
+            0,
+            View::Full,
+            vec![item("a", "a"), item("b", "b")],
+        );
+        list(&mut app, 3, View::Full, vec![item("c", "c")]);
+        app.on_key(code(KeyCode::Down));
+        assert_eq!((app.focus, app.boxes[0].selected), (0, 1));
+        app.on_key(code(KeyCode::Down));
+        assert_eq!(app.focus, 3);
+        app.on_key(code(KeyCode::Down));
+        assert_eq!(app.focus, 3);
+        app.on_key(code(KeyCode::Up));
+        assert_eq!((app.focus, app.boxes[0].selected), (0, 1));
+        app.on_key(code(KeyCode::Up));
+        app.on_key(code(KeyCode::Up));
+        assert_eq!((app.focus, app.boxes[0].selected), (0, 0));
+        app.focus = 1;
+        app.on_key(code(KeyCode::Down));
+        assert_eq!(app.focus, 4);
+    }
+
+    #[test]
+    fn arrows_pick_the_nearest_overlapping_box_under_a_wide_one() {
+        let mut app = grid_app(&[(0, 0, 2), (1, 0, 1), (1, 1, 1)]);
+        app.on_key(code(KeyCode::Down));
+        assert_eq!(app.focus, 1);
+        app.focus = 2;
+        app.on_key(code(KeyCode::Up));
+        assert_eq!(app.focus, 0);
+    }
+
+    #[test]
+    fn arrows_stay_inside_a_zoomed_box() {
+        let mut app = grid_app(&TWO_BY_THREE);
+        list(&mut app, 0, View::Full, vec![item("a", "a")]);
+        app.mode = Mode::Zoom(0);
+        app.on_key(code(KeyCode::Down));
+        app.on_key(code(KeyCode::Right));
+        assert_eq!(app.focus, 0);
     }
 
     fn hit(col: u16, row: u16) -> Option<Hit> {
