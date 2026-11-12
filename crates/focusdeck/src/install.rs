@@ -129,6 +129,13 @@ fn is_loopback(url: &reqwest::Url) -> bool {
     matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
 }
 
+// an index from the network must not steer a download to a service on this machine
+fn http_target_allowed(registry: &str, target: &str) -> bool {
+    !target.starts_with("http://")
+        || registry.starts_with("file://")
+        || reqwest::Url::parse(registry).is_ok_and(|u| is_loopback(&u))
+}
+
 fn insecure(url: &str) -> String {
     t_args(msg::INSTALL_INSECURE_URL, &[("url", url.into())])
 }
@@ -263,6 +270,9 @@ pub async fn install(
                 ("name", name.into())
             ]
         ));
+    }
+    if !http_target_allowed(registry, &target.url) {
+        bail!(insecure(&target.url));
     }
     let bytes = fetch(&target.url).await?;
     if verify_sha256(&bytes, &target.sha256).is_err() {
@@ -474,6 +484,45 @@ mod tests {
                 redirect_allowed(&first, &next),
                 allowed,
                 "{first} -> {next}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_local_index_may_name_a_plain_http_download() {
+        let cases = [
+            (
+                "https://registry.example/index.toml",
+                "http://127.0.0.1:1/p",
+                false,
+            ),
+            (
+                "https://registry.example/index.toml",
+                "http://other.example/p",
+                false,
+            ),
+            (
+                "https://registry.example/index.toml",
+                "https://other.example/p",
+                true,
+            ),
+            (
+                "http://127.0.0.1:1/index.toml",
+                "http://localhost:2/p",
+                true,
+            ),
+            (
+                "https://localhost:1/index.toml",
+                "http://127.0.0.1:2/p",
+                true,
+            ),
+            ("file:///srv/index.toml", "http://127.0.0.1:1/p", true),
+        ];
+        for (registry, target, allowed) in cases {
+            assert_eq!(
+                http_target_allowed(registry, target),
+                allowed,
+                "{registry} -> {target}"
             );
         }
     }

@@ -227,7 +227,7 @@ Implement the `Plugin` trait and call `focusdeck_protocol::serve(plugin, stdin.l
 
 ## Security and privacy
 
-- Plugin indexes and plugin files are fetched over HTTPS. Plain `http://` is refused, also as a redirect target; the exceptions are `127.0.0.1`, `[::1]` and `localhost`, for testing an index locally. An index fetched over the network cannot point a plugin at a local file.
+- Plugin indexes and plugin files are fetched over HTTPS. Plain `http://` is refused, also as a redirect target; the exceptions are `127.0.0.1`, `[::1]` and `localhost`, for testing an index locally. An index fetched over the network cannot point a plugin at a local file or at these addresses.
 - `plugin install` records the sha256 of the binary in a manifest next to it. Before a box starts that plugin, focusdeck compares the binary with the manifest and shows an error instead of starting a binary that changed. A plugin copied in by hand has no manifest and is not checked.
 - The log, the capture queue, the reminder record and `local.json` are created readable and writable by the owner only (mode 0600).
 - `~/.local/state/focusdeck/focusdeck.log` is moved to `focusdeck.log.1` once it passes 1 MiB, so it holds at most about 2 MiB.

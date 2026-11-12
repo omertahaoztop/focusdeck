@@ -227,7 +227,7 @@ focusdeck-protocol = { git = "https://github.com/omertahaoztop/focusdeck", tag =
 
 ## Güvenlik ve gizlilik
 
-- Plugin dizinleri ve plugin dosyaları HTTPS üzerinden indirilir. Düz `http://` reddedilir, yönlendirme hedefi olarak da. İstisna, dizini yerelde denemek için `127.0.0.1`, `[::1]` ve `localhost` adresleridir. Ağdan indirilen bir dizin plugin'i yerel bir dosyaya yönlendiremez.
+- Plugin dizinleri ve plugin dosyaları HTTPS üzerinden indirilir. Düz `http://` reddedilir, yönlendirme hedefi olarak da. İstisna, dizini yerelde denemek için `127.0.0.1`, `[::1]` ve `localhost` adresleridir. Ağdan indirilen bir dizin plugin'i yerel bir dosyaya ya da bu adreslere yönlendiremez.
 - `plugin install` binary'nin sha256'sını yanındaki manifest dosyasına yazar. Bir kutu o plugin'i başlatmadan önce focusdeck binary'yi manifest ile karşılaştırır, değişmiş bir binary'yi başlatmayıp hata gösterir. Elle kopyalanan plugin'in manifest'i olmadığından denetlenmez.
 - Log, yakalama kuyruğu, hatırlatma kaydı ve `local.json` yalnız sahibinin okuyup yazabileceği şekilde (0600) oluşturulur.
 - `~/.local/state/focusdeck/focusdeck.log` 1 MiB'ı geçince `focusdeck.log.1` adına taşınır, yani en çok 2 MiB kadar yer tutar.
