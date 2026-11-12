@@ -171,7 +171,10 @@ async fn missing_target_writes_nothing() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "redmine için bu makineye uygun sürüm yok (x86_64-unknown-linux-gnu)"
+        format!(
+            "redmine için bu makineye uygun sürüm yok ({})",
+            current_target()
+        )
     );
     assert!(entries(plugins.path()).is_empty());
 }
