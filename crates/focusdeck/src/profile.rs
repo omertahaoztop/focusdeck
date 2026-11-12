@@ -203,7 +203,7 @@ mod tests {
     const EXAMPLE: &str = r#"
 name = "iş"
 capture_into = "sozlu"
-capture_refs = { R = "https://destek.mono.tr/issues/{}" }
+capture_refs = { R = "https://redmine.example.com/issues/{}" }
 capture_label_aliases = { tel = "telefon", yuz = "yuz-yuze", "yüz" = "yuz-yuze" }
 
 [[box]]
@@ -213,7 +213,7 @@ plugin = "vikunja"
 row = 0
 col = 0
 refresh = "1m"
-config = { url = "https://vikunja.omertahaoztop.tr", token_file = "~/.config/focusdeck/secrets/vikunja", project = "Mono" }
+config = { url = "https://vikunja.example.com", token_file = "~/.config/focusdeck/secrets/vikunja", project = "Mono" }
 
 [[box]]
 id = "redmine"
@@ -222,7 +222,7 @@ plugin = "redmine"
 row = 0
 col = 1
 plan_into = "sozlu"
-config = { url = "https://destek.mono.tr", key_file = "~/.config/focusdeck/secrets/redmine" }
+config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/secrets/redmine" }
 "#;
 
     fn load_str(toml: &str) -> Result<Profile, ProfileError> {
@@ -243,7 +243,7 @@ config = { url = "https://destek.mono.tr", key_file = "~/.config/focusdeck/secre
         let p = load_str(EXAMPLE).unwrap();
         assert_eq!(p.name, "iş");
         assert_eq!(p.capture_into.as_deref(), Some("sozlu"));
-        assert_eq!(p.capture_refs["R"], "https://destek.mono.tr/issues/{}");
+        assert_eq!(p.capture_refs["R"], "https://redmine.example.com/issues/{}");
         assert_eq!(p.capture_label_aliases["yüz"], "yuz-yuze");
         assert_eq!(p.capture_label_aliases.len(), 3);
         assert_eq!(p.boxes.len(), 2);

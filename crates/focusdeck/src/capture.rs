@@ -212,7 +212,7 @@ mod tests {
     fn p(text: &str) -> Result<Capture, String> {
         let refs = BTreeMap::from([(
             "R".to_owned(),
-            "https://destek.mono.tr/issues/{}".to_owned(),
+            "https://redmine.example.com/issues/{}".to_owned(),
         )]);
         let aliases = BTreeMap::from([("tel".to_owned(), "telefon".to_owned())]);
         parse(text, now(), &refs, &aliases)
@@ -314,7 +314,7 @@ mod tests {
             c.links,
             [Link {
                 label: "R45539".into(),
-                url: "https://destek.mono.tr/issues/45539".into()
+                url: "https://redmine.example.com/issues/45539".into()
             }]
         );
         assert_eq!(c.title, "S3 bak");
