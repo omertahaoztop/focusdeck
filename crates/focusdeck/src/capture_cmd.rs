@@ -102,7 +102,7 @@ pub async fn run(
     };
     let unsent: Vec<Queued> = progress.items.iter().cloned().collect();
     let committed = queue.commit(taken, &unsent);
-    let failed = !matches!(outcome, Outcome::Done(Ok(()))) || committed.is_err();
+    let code = exit_code(&outcome, committed.is_err());
     match (outcome, committed) {
         (Outcome::Done(Ok(())), committed) => {
             if let Err(e) = committed {
@@ -110,20 +110,20 @@ pub async fn run(
             }
             if handed_over(pushed.is_ok(), progress.own) {
                 notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &shown, false);
-                return Ok(0);
-            }
-            let body = if progress.queued_sent > 0 {
-                format!(
-                    "{shown}\n{}",
-                    t_args(
-                        msg::CAPTURE_QUEUE_FLUSHED,
-                        &[("count", progress.queued_sent.into())]
-                    )
-                )
             } else {
-                shown
-            };
-            notify::send_logged(&log, &t(msg::CAPTURE_ADDED_TITLE), &body, false);
+                let body = if progress.queued_sent > 0 {
+                    format!(
+                        "{shown}\n{}",
+                        t_args(
+                            msg::CAPTURE_QUEUE_FLUSHED,
+                            &[("count", progress.queued_sent.into())]
+                        )
+                    )
+                } else {
+                    shown
+                };
+                notify::send_logged(&log, &t(msg::CAPTURE_ADDED_TITLE), &body, false);
+            }
         }
         (Outcome::Done(Err(e)), Ok(())) => {
             notify::log_line(&log, &format!("{target}: {e}"));
@@ -141,17 +141,33 @@ pub async fn run(
                 true,
             );
         }
-        (outcome, Err(io)) => {
-            let why = match outcome {
-                Outcome::Done(Err(e)) => format!("{target}: {e}"),
-                Outcome::Done(Ok(())) => "sent".to_owned(),
-                Outcome::Interrupted => "interrupted".to_owned(),
-            };
-            notify::log_line(&log, &format!("{why}; could not write the queue: {io}"));
-            notify::send_logged(&log, &t(msg::CAPTURE_LOST_TITLE), &io.to_string(), true);
+        (Outcome::Done(Err(e)), Err(io)) => {
+            report_commit_failure(&log, &format!("{target}: {e}"), &io, pushed.is_ok());
+        }
+        (Outcome::Interrupted, Err(io)) => {
+            report_commit_failure(&log, "interrupted", &io, pushed.is_ok());
         }
     }
-    Ok(i32::from(failed))
+    Ok(code)
+}
+
+fn exit_code(outcome: &Outcome, commit_failed: bool) -> i32 {
+    i32::from(!matches!(outcome, Outcome::Done(Ok(()))) || commit_failed)
+}
+
+// The taken files still hold every note when the push worked, so only a failed push makes a failed commit a loss.
+fn commit_failure_title(pushed: bool) -> &'static str {
+    if pushed {
+        msg::CAPTURE_QUEUED_TITLE
+    } else {
+        msg::CAPTURE_LOST_TITLE
+    }
+}
+
+fn report_commit_failure(log: &std::path::Path, why: &str, io: &std::io::Error, pushed: bool) {
+    notify::log_line(log, &format!("{why}; could not write the queue: {io}"));
+    let title = t(commit_failure_title(pushed));
+    notify::send_logged(log, &title, &io.to_string(), true);
 }
 
 // A concurrent run took the queue file that holds this note, so that run delivers it.
@@ -309,6 +325,20 @@ mod tests {
         assert!(handed_over(true, None));
         assert!(!handed_over(true, Some(0)));
         assert!(!handed_over(false, Some(0)));
+    }
+
+    #[test]
+    fn a_failed_commit_is_lost_only_when_the_push_failed_too() {
+        assert_eq!(commit_failure_title(true), msg::CAPTURE_QUEUED_TITLE);
+        assert_eq!(commit_failure_title(false), msg::CAPTURE_LOST_TITLE);
+    }
+
+    #[test]
+    fn a_failed_commit_fails_the_run_even_when_delivery_worked() {
+        assert_eq!(exit_code(&Outcome::Done(Ok(())), false), 0);
+        assert_eq!(exit_code(&Outcome::Done(Ok(())), true), 1);
+        assert_eq!(exit_code(&Outcome::Done(Err("x".into())), false), 1);
+        assert_eq!(exit_code(&Outcome::Interrupted, false), 1);
     }
 
     #[test]
