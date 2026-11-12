@@ -125,7 +125,9 @@ name = "focusdeck"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dirs",
+ "focusdeck-protocol",
  "serde",
  "serde_json",
  "tempfile",
