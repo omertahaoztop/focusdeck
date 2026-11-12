@@ -52,10 +52,11 @@ impl Env {
     fn exe(&self) -> PathBuf {
         let script = self.dir.path().join("run.sh");
         let body = format!(
-            "#!/bin/sh\nFAKE_MODE_FILE='{}' FAKE_LOG='{}' FAKE_LANG_LOG='{}' exec '{}'\n",
+            "#!/bin/sh\nFAKE_MODE_FILE='{}' FAKE_LOG='{}' FAKE_LANG_LOG='{}' FAKE_START_LOG='{}' exec '{}'\n",
             self.dir.path().join("mode").display(),
             self.fake_log().display(),
             self.lang_log().display(),
+            self.start_log().display(),
             fake_plugin().display()
         );
         std::fs::write(&script, body).unwrap();
@@ -71,15 +72,14 @@ impl Env {
         self.dir.path().join("lang.log")
     }
 
-    fn exe_without_lang(&self) -> PathBuf {
-        let script = self.dir.path().join("no-lang.sh");
-        let body = format!(
-            "#!/bin/sh\nunset FOCUSDECK_LANG\nexec '{}'\n",
-            self.exe().display()
-        );
-        std::fs::write(&script, body).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        script
+    fn start_log(&self) -> PathBuf {
+        self.dir.path().join("starts.log")
+    }
+
+    fn starts(&self) -> usize {
+        std::fs::read_to_string(self.start_log())
+            .map(|text| text.lines().count())
+            .unwrap_or(0)
     }
 
     fn log(&self) -> PathBuf {
@@ -93,7 +93,11 @@ impl Env {
             json!({"token": "x"}),
             self.log(),
         )
-        .with_timeout(Duration::from_millis(500))
+        .with_timeout(Duration::from_secs(10))
+    }
+
+    fn hanging_host(&self) -> PluginHost {
+        self.host().with_timeout(Duration::from_millis(500))
     }
 
     fn configure_lines(&self) -> usize {
@@ -135,7 +139,7 @@ async fn null_result_is_none() {
 #[tokio::test]
 async fn timeout_is_reported() {
     let env = Env::new("hang");
-    let mut host = env.host();
+    let mut host = env.hanging_host();
     let err = host
         .call::<_, ListResult>("list", &summary())
         .await
@@ -146,7 +150,7 @@ async fn timeout_is_reported() {
 #[tokio::test]
 async fn timeout_does_not_leak_stale_answer_into_next_call() {
     let env = Env::new("hang");
-    let mut host = env.host();
+    let mut host = env.hanging_host();
     assert!(matches!(
         host.call::<_, ListResult>("list", &summary()).await,
         Err(HostError::Timeout)
@@ -277,18 +281,129 @@ async fn host_passes_requested_language() {
         std::fs::read_to_string(env.lang_log()).unwrap().trim(),
         "tr-TR"
     );
+}
 
-    std::fs::remove_file(env.lang_log()).unwrap();
-    let mut host = PluginHost::new(
-        "sozlu".into(),
-        env.exe_without_lang(),
-        json!({"token": "x"}),
-        env.log(),
-    )
-    .with_timeout(Duration::from_millis(500))
-    .with_lang(None);
+#[tokio::test]
+async fn protocol_violations_are_reported() {
+    // None means the plugin exits without replying
+    let cases: [(&str, Option<String>); 7] = [
+        ("raw-non-utf8", Some("output is not UTF-8".into())),
+        ("raw-non-json", Some("not json".into())),
+        ("raw-long-non-json", Some("x".repeat(200))),
+        (
+            "raw-wrong-id",
+            Some(r#"{"id":102,"result":{"items":[]}}"#.into()),
+        ),
+        (
+            "raw-oversize",
+            Some("plugin sent a line longer than 16 MiB".into()),
+        ),
+        (
+            "raw-bad-result",
+            Some("invalid result: invalid type: integer `5`, expected a sequence".into()),
+        ),
+        ("raw-exit", None),
+    ];
+    for (mode, expected) in cases {
+        let env = Env::new(mode);
+        let mut host = env.host().with_max_line(1024);
+        let err = host
+            .call::<_, ListResult>("list", &summary())
+            .await
+            .unwrap_err();
+        match expected {
+            Some(line) => assert!(
+                matches!(&err, HostError::BadLine(got) if *got == line),
+                "{mode}: {err:?}"
+            ),
+            None => assert!(matches!(err, HostError::Crashed), "{mode}: {err:?}"),
+        }
+        env.set_mode("ok");
+        let result: ListResult = host.call("list", &summary()).await.unwrap();
+        assert_eq!(result.items.len(), 2, "{mode}");
+        assert_eq!(env.starts(), 2, "{mode}");
+    }
+}
+
+#[tokio::test]
+async fn oversized_stderr_line_is_cut_in_the_log() {
+    let env = Env::new("raw-stderr-long");
+    let mut host = env.host();
     let _: ListResult = host.call("list", &summary()).await.unwrap();
-    assert_eq!(std::fs::read_to_string(env.lang_log()).unwrap().trim(), "-");
+    let cut = format!("[sozlu] {}", "y".repeat(64 * 1024));
+    let mut lines = Vec::new();
+    for _ in 0..100 {
+        let text = std::fs::read_to_string(env.log()).unwrap_or_default();
+        lines = text.lines().map(str::to_owned).collect();
+        if lines.last().is_some_and(|l| l == "[sozlu] after") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(lines, [cut, "[sozlu] after".to_owned()]);
+}
+
+#[tokio::test]
+async fn failed_describe_reports_once_per_command() {
+    let env = Env::new("oldproto");
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
+    let (ev_tx, mut ev_rx) = mpsc::channel(16);
+    let handle = worker::spawn(0, env.host(), cmd_rx, ev_tx);
+    for starts in 1..=2 {
+        cmd_tx.send(BoxCmd::Refresh(View::Summary)).await.unwrap();
+        match next_event(&mut ev_rx).await {
+            BoxEvent::Listed { result, .. } => {
+                assert_eq!(result.unwrap_err(), "protocol mismatch: core 1, plugin 0");
+            }
+            other => panic!("Listed bekleniyordu: {other:?}"),
+        }
+        assert_eq!(env.starts(), starts);
+    }
+    cmd_tx
+        .send(BoxCmd::Drop {
+            item: serde_json::from_value(json!({"id": "7", "title": "t"})).unwrap(),
+            from: None,
+        })
+        .await
+        .unwrap();
+    match next_event(&mut ev_rx).await {
+        BoxEvent::Finished { what, result, .. } => {
+            assert_eq!(what, "drop");
+            assert_eq!(result.unwrap_err(), "protocol mismatch: core 1, plugin 0");
+        }
+        other => panic!("Finished bekleniyordu: {other:?}"),
+    }
+    assert_eq!(env.starts(), 3);
+    drop(cmd_tx);
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn describe_recovers_on_a_later_command() {
+    let env = Env::new("oldproto");
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
+    let (ev_tx, mut ev_rx) = mpsc::channel(16);
+    let handle = worker::spawn(2, env.host(), cmd_rx, ev_tx);
+    cmd_tx.send(BoxCmd::Refresh(View::Summary)).await.unwrap();
+    assert!(matches!(
+        next_event(&mut ev_rx).await,
+        BoxEvent::Listed { result: Err(_), .. }
+    ));
+    env.set_mode("ok");
+    cmd_tx.send(BoxCmd::Refresh(View::Summary)).await.unwrap();
+    match next_event(&mut ev_rx).await {
+        BoxEvent::Described { idx, describe } => {
+            assert_eq!((idx, describe.name.as_str()), (2, "fake"));
+        }
+        other => panic!("Described bekleniyordu: {other:?}"),
+    }
+    match next_event(&mut ev_rx).await {
+        BoxEvent::Listed { result, .. } => assert_eq!(result.unwrap().len(), 2),
+        other => panic!("Listed bekleniyordu: {other:?}"),
+    }
+    assert_eq!(env.starts(), 2);
+    drop(cmd_tx);
+    handle.await.unwrap();
 }
 
 async fn next_event(rx: &mut mpsc::Receiver<BoxEvent>) -> BoxEvent {
