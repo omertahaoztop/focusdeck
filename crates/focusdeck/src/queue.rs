@@ -330,8 +330,9 @@ mod tests {
         let (dir, q) = queue();
         let line = |t: &str| format!("{{\"text\":\"{t}\",\"at\":\"2026-11-12T10:00:00+03:00\"}}\n");
         let aside = |n: u8| {
-            dir.path()
-                .join(format!("capture-queue.jsonl.taken.0000000000000000000{n}-1-000000"))
+            dir.path().join(format!(
+                "capture-queue.jsonl.taken.0000000000000000000{n}-1-000000"
+            ))
         };
         fs::write(aside(1), line("a")).unwrap();
         fs::write(aside(2), line("b")).unwrap();
