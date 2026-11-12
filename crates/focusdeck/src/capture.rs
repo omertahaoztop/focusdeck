@@ -213,14 +213,18 @@ fn clock_time(now: DateTime<FixedOffset>, naive: NaiveDateTime) -> Option<DateTi
     }
 }
 
-// An ambiguous time takes the earlier of its two readings; one inside a gap moves an hour later.
+const MAX_GAP_MINUTES: i64 = 24 * 60;
+
+// An ambiguous time takes the earlier of its two readings; one inside a gap moves to the first valid minute after it.
 fn local_time<Tz: TimeZone>(tz: &Tz, naive: NaiveDateTime) -> Option<DateTime<FixedOffset>> {
     let map = |naive: NaiveDateTime| match tz.from_local_datetime(&naive) {
         LocalResult::Single(t) => Some(t),
         LocalResult::Ambiguous(a, b) => Some(a.min(b)),
         LocalResult::None => None,
     };
-    let found = map(naive).or_else(|| map(naive.checked_add_signed(Duration::hours(1))?))?;
+    let found = map(naive).or_else(|| {
+        (1..=MAX_GAP_MINUTES).find_map(|m| map(naive.checked_add_signed(Duration::minutes(m))?))
+    })?;
     Some(found.fixed_offset())
 }
 
@@ -352,12 +356,57 @@ mod tests {
     }
 
     #[test]
-    fn local_time_in_a_gap_moves_an_hour_later() {
+    fn local_time_in_a_one_hour_gap_moves_to_the_end_of_the_gap() {
         assert_eq!(
             local_time(&Zone, naive("2026-03-08 02:30"))
                 .unwrap()
                 .to_rfc3339(),
-            "2026-03-08T03:30:00+01:00"
+            "2026-03-08T03:00:00+01:00"
+        );
+    }
+
+    // +00:00 before 2026-03-08 02:00, +02:00 from 04:00 local, so 02:00-04:00 does not exist
+    #[derive(Clone)]
+    struct WideGap;
+
+    impl TimeZone for WideGap {
+        type Offset = FixedOffset;
+
+        fn from_offset(_: &FixedOffset) -> WideGap {
+            WideGap
+        }
+
+        fn offset_from_local_date(&self, d: &NaiveDate) -> LocalResult<FixedOffset> {
+            self.offset_from_local_datetime(&d.and_hms_opt(12, 0, 0).unwrap())
+        }
+
+        fn offset_from_local_datetime(&self, l: &NaiveDateTime) -> LocalResult<FixedOffset> {
+            let gap_start = Zone::spring();
+            if *l >= gap_start && *l < gap_start + Duration::hours(2) {
+                LocalResult::None
+            } else if *l >= gap_start {
+                LocalResult::Single(FixedOffset::east_opt(7200).unwrap())
+            } else {
+                LocalResult::Single(FixedOffset::east_opt(0).unwrap())
+            }
+        }
+
+        fn offset_from_utc_date(&self, d: &NaiveDate) -> FixedOffset {
+            self.offset_from_utc_datetime(&d.and_hms_opt(12, 0, 0).unwrap())
+        }
+
+        fn offset_from_utc_datetime(&self, u: &NaiveDateTime) -> FixedOffset {
+            FixedOffset::east_opt(if *u >= Zone::spring() { 7200 } else { 0 }).unwrap()
+        }
+    }
+
+    #[test]
+    fn local_time_in_a_two_hour_gap_moves_to_the_end_of_the_gap() {
+        assert_eq!(
+            local_time(&WideGap, naive("2026-03-08 03:30"))
+                .unwrap()
+                .to_rfc3339(),
+            "2026-03-08T04:00:00+02:00"
         );
     }
 
