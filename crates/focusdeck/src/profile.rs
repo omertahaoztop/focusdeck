@@ -332,24 +332,35 @@ fn create_starter(paths: &Paths) -> Result<String, ProfileError> {
         path: path.clone(),
         source,
     };
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(create_error)?;
-    }
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path);
-    match file {
-        Ok(mut file) => {
-            use std::io::Write;
-            file.write_all(starter_profile(&i18n::t(msg::STARTER_TITLE)).as_bytes())
-                .map_err(create_error)?;
-        }
-        // another focusdeck won the race to the same file
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+    let dir = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir).map_err(create_error)?;
+    // a dot-prefixed name without the .toml extension stays invisible to the profile scan
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tmp = dir.join(format!(
+        ".{NAME}.toml.{}.{}.tmp",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let published = write_synced(&tmp, &starter_profile(&i18n::t(msg::STARTER_TITLE)))
+        .and_then(|()| std::fs::hard_link(&tmp, &path));
+    let _ = std::fs::remove_file(&tmp);
+    match published {
+        Ok(()) => {}
+        // another focusdeck published a complete file first
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_file() => {}
         Err(e) => return Err(create_error(e)),
     }
     Ok(NAME.to_string())
+}
+
+fn write_synced(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()
 }
 
 pub fn starter_profile(title: &str) -> String {
@@ -638,6 +649,62 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
             );
             assert_eq!(profile_files(&paths), ["notes.toml"]);
         }
+    }
+
+    #[test]
+    fn resolve_name_reuses_a_complete_starter_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(&dir);
+        let existing = starter_profile("Benim");
+        let path = paths.profile_path("notes");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &existing).unwrap();
+        assert_eq!(
+            resolve_name(&paths, None, None, &cfg(None)).unwrap(),
+            "notes"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), existing);
+        assert_eq!(profile_files(&paths), ["notes.toml"]);
+    }
+
+    #[test]
+    fn concurrent_first_runs_never_see_a_partial_starter() {
+        for _ in 0..50 {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = paths_in(&dir);
+            let barrier = std::sync::Barrier::new(8);
+            std::thread::scope(|scope| {
+                for _ in 0..8 {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        let name = resolve_name(&paths, None, None, &cfg(None)).unwrap();
+                        assert_eq!(name, "notes");
+                        let p = load(&paths.profile_path(&name)).unwrap();
+                        assert_eq!(p.boxes.len(), 1);
+                    });
+                }
+            });
+            assert_eq!(profile_files(&paths), ["notes.toml"]);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_starter_write_leaves_no_profile() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(&dir);
+        let profiles = paths.config_dir.join("profiles");
+        std::fs::create_dir_all(&profiles).unwrap();
+        std::fs::set_permissions(&profiles, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let writable = std::fs::File::create(profiles.join(".probe")).is_ok();
+        let result = resolve_name(&paths, None, None, &cfg(None));
+        std::fs::set_permissions(&profiles, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if writable {
+            return;
+        }
+        assert!(matches!(result.unwrap_err(), ProfileError::Create { .. }));
+        assert!(profile_files(&paths).is_empty());
     }
 
     #[test]
