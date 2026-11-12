@@ -48,10 +48,9 @@ fn action_hints(state: &BoxState, parts: &mut Vec<String>) {
 
 fn board(app: &App) -> String {
     let mut parts = vec![
+        t(msg::HINT_BOARD_HELP),
+        t(msg::HINT_BOARD_QUIT),
         t(msg::HINT_BOARD_NOTE),
-        t(msg::HINT_BOARD_SELECT),
-        t(msg::HINT_BOARD_ZOOM),
-        t(msg::HINT_BOARD_DRAG),
     ];
     if let Some(state) = app.boxes.get(app.focus) {
         action_hints(state, &mut parts);
@@ -60,8 +59,9 @@ fn board(app: &App) -> String {
         t(msg::HINT_OPEN),
         t(msg::HINT_MOVE),
         t(msg::HINT_BOARD_BOX),
-        t(msg::HINT_BOARD_HELP),
-        t(msg::HINT_BOARD_QUIT),
+        t(msg::HINT_BOARD_SELECT),
+        t(msg::HINT_BOARD_ZOOM),
+        t(msg::HINT_BOARD_DRAG),
     ]);
     join(parts)
 }
@@ -73,6 +73,9 @@ fn zoom(app: &App, idx: usize) -> String {
             parts.push(t(msg::HINT_ZOOM_PLAN));
         }
         action_hints(state, &mut parts);
+        if has_action(state, "reorder") && app.active_filter(idx).is_none() {
+            parts.push(t(msg::HINT_ZOOM_REORDER));
+        }
     }
     parts.extend([
         t(msg::HINT_OPEN),
@@ -91,26 +94,25 @@ mod tests {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use std::time::Instant;
 
-    const TAIL: &str = "o open · m move · Tab box · ? help · q quit";
+    const HEAD: &str = "? help · q quit · a note";
+    const REST: &str = "o open · m move · Tab box · click select · double click zoom · drag move";
 
     #[test]
     fn board_hint_per_focused_box() {
         let mut app = loaded_app();
         app.focus = SOZLU;
-        assert_eq!(
-            text(&app),
-            format!("a note · click select · double click zoom · drag move · x done · {TAIL}")
-        );
+        assert_eq!(text(&app), format!("{HEAD} · x done · {REST}"));
         app.focus = REDMINE;
-        assert_eq!(
-            text(&app),
-            format!("a note · click select · double click zoom · drag move · {TAIL}")
-        );
+        assert_eq!(text(&app), format!("{HEAD} · {REST}"));
         app.focus = ZULIP;
-        assert_eq!(
-            text(&app),
-            format!("a note · click select · double click zoom · drag move · u unstar · {TAIL}")
-        );
+        assert_eq!(text(&app), format!("{HEAD} · u unstar · {REST}"));
+    }
+
+    #[test]
+    fn board_hint_keeps_help_and_quit_in_a_narrow_terminal() {
+        let app = loaded_app();
+        let cut = crate::ui::render::truncate(&text(&app), 40);
+        assert!(cut.starts_with("? help · q quit · a note"), "{cut}");
     }
 
     #[test]
@@ -120,6 +122,11 @@ mod tests {
         assert_eq!(
             text(&app),
             "space add to plan · o open · / search · m move · Esc back"
+        );
+        app.mode = Mode::Zoom(SOZLU);
+        assert_eq!(
+            text(&app),
+            "x done · Shift+↑↓ reorder · o open · / search · m move · Esc back"
         );
         app.mode = Mode::Zoom(ZULIP);
         assert_eq!(
@@ -153,10 +160,7 @@ mod tests {
     #[test]
     fn hint_before_describe_has_no_action_keys() {
         let app = App::new(&profile());
-        assert_eq!(
-            text(&app),
-            format!("a note · click select · double click zoom · drag move · {TAIL}")
-        );
+        assert_eq!(text(&app), format!("{HEAD} · {REST}"));
     }
 
     fn hover(app: &mut App, kind: MouseEventKind, at: Hit) {
