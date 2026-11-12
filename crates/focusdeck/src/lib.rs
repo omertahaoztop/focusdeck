@@ -9,4 +9,5 @@ pub mod paths;
 pub mod profile;
 pub mod queue;
 pub mod secrets;
+pub mod ui;
 pub mod worker;

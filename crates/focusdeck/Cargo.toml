@@ -8,6 +8,7 @@ license.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
+crossterm.workspace = true
 dirs.workspace = true
 focusdeck-protocol = { path = "../focusdeck-protocol" }
 reqwest.workspace = true
