@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/fake-plugin", "crates/focusdeck", "crates/focusdeck-protocol"]
+members = ["crates/fake-plugin", "crates/focusdeck", "crates/focusdeck-i18n", "crates/focusdeck-protocol"]
 
 [workspace.package]
 edition = "2024"
@@ -11,6 +11,8 @@ anyhow = "1.0.104"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.7", features = ["derive"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
+fluent-bundle = "0.16"
+fluent-syntax = "0.12"
 futures-util = "0.3.34"
 dirs = "7.0.0"
 mockito = "1"
@@ -23,4 +25,5 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
 toml = "1.2.1"
+unic-langid = "0.9"
 unicode-width = "0.2"
