@@ -1,16 +1,26 @@
 # focusdeck
 
-Terminalde çalışan "bende bekleyen her şey" panosu. Sözlü verilen sözler, Redmine işleri, yıldızlı mailler ve mesajlar kaynak başına bir kutuda, tek ekranda durur. Kutuları ayrı programlar olan plugin'ler doldurur; fareyle taşınır, her an hangi tuşun ne yaptığı en alt satırda yazar.
+**English** · [Türkçe](README.tr.md)
 
-Linux x86_64 ve aarch64 hedeflenir.
+A terminal board for "everything that is waiting on me". Verbal promises, Redmine issues, starred mail and messages each sit in their own box on one screen. Boxes are filled by plugins, which are separate programs. You can drag items between boxes with the mouse, and the bottom line always tells you what each key does right now.
 
-## Kurulum
+Targets Linux x86_64 and aarch64. The interface is in Turkish.
+
+![Main screen: six boxes, overdue items in red](docs/screenshots/board.png)
+
+| Zoomed box | Move | Key list |
+|---|---|---|
+| ![Zoomed Redmine box, planned items starred](docs/screenshots/zoom.png) | ![Choosing a target box](docs/screenshots/move.png) | ![Key list opened with ?](docs/screenshots/help.png) |
+
+The data in the screenshots is made up.
+
+## Install
 
 ```sh
 cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.1.0 --locked focusdeck
 ```
 
-Hazır plugin'ler [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) reposunda. Dizinden kurulur:
+Ready-made plugins live in the [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) repository and are installed from its index:
 
 ```sh
 focusdeck plugin install vikunja
@@ -18,111 +28,111 @@ focusdeck plugin list
 focusdeck plugin remove vikunja
 ```
 
-Plugin'ler `~/.local/share/focusdeck/plugins/<ad>` altına yazılır. `install` dizinden indirdiği dosyanın sha256'sını doğrular, tutmazsa dosyayı siler. `remove` plugin'i hâlâ kullanan bir profil varsa uyarır.
+Plugins are written to `~/.local/share/focusdeck/plugins/<name>`. `install` checks the sha256 of the downloaded file against the index and deletes the file if it does not match. `remove` warns if a profile still uses the plugin.
 
-> Plugin'ler kullanıcının yetkisiyle çalışır, kum havuzu yoktur. Bir plugin'i kurmadan önce kaynağına güvendiğinden emin ol.
+> Plugins run with your user's permissions; there is no sandbox. Make sure you trust a plugin's source before installing it.
 
-## Ayarlar
+## Settings
 
-`~/.config/focusdeck/config.toml`, hepsi isteğe bağlı:
+`~/.config/focusdeck/config.toml`, every key optional:
 
 ```toml
-default_profile = "iş"
+default_profile = "work"
 registries = ["https://raw.githubusercontent.com/omertahaoztop/focusdeck-plugins/main/index.toml"]
-capture_command = ["rofi", "-dmenu", "-p", "Not"]
+capture_command = ["rofi", "-dmenu", "-p", "Note"]
 ```
 
-- `default_profile`: `--profile` ve `FOCUSDECK_PROFILE` verilmediğinde kullanılan profil.
-- `registries`: plugin dizini adresleri, sırayla. Aynı ad iki dizinde varsa öndeki kazanır. Kendi dizinini ya da fork'unu buraya ekleyebilirsin.
-- `capture_command`: `capture` metinsiz çağrılınca tek satır sormak için çalıştırılan komut.
+- `default_profile`: the profile used when neither `--profile` nor `FOCUSDECK_PROFILE` is given.
+- `registries`: plugin index URLs, in order. If the same name appears in two indexes, the earlier one wins. Add your own index or a fork here.
+- `capture_command`: the command run to ask for one line when `capture` is called without text.
 
-## Profil
+## Profile
 
-`~/.config/focusdeck/profiles/<ad>.toml`. Profil seçimi sırasıyla `--profile`, `FOCUSDECK_PROFILE`, `default_profile`.
+`~/.config/focusdeck/profiles/<name>.toml`. The profile is chosen from `--profile`, then `FOCUSDECK_PROFILE`, then `default_profile`.
 
 ```toml
-name = "iş"
-capture_into = "sozlu"
+name = "work"
+capture_into = "verbal"
 capture_refs = { R = "https://redmine.example.com/issues/{}" }
-capture_label_aliases = { tel = "telefon", yuz = "yuz-yuze", "yüz" = "yuz-yuze" }
+capture_label_aliases = { tel = "phone", f2f = "face-to-face" }
 
 [[box]]
-id = "sozlu"
-title = "Sözlü işler"
+id = "verbal"
+title = "Verbal promises"
 plugin = "vikunja"
 row = 0
 col = 0
 refresh = "1m"
-config = { url = "https://vikunja.example.com", token_file = "~/.config/focusdeck/secrets/vikunja", project = "Mono" }
+config = { url = "https://vikunja.example.com", token_file = "~/.config/focusdeck/secrets/vikunja", project = "Home" }
 
 [[box]]
 id = "redmine"
-title = "Redmine planım"
+title = "Redmine plan"
 plugin = "redmine"
 row = 0
 col = 1
-plan_into = "sozlu"
+plan_into = "verbal"
 config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/secrets/redmine" }
 ```
 
-- `row` ve `col` ızgara konumudur. İsteğe bağlı `width` ve `height` kutuyu birden çok hücreye yayar.
-- `config` tablosu olduğu gibi plugin'e gider. Plugin'lerin ayar anahtarları kendi README'lerinde yazar.
-- Şifreler profilde durmaz, yalnız dosya yolu (`token_file`, `key_file`) yazılır. Adı `_file` ile biten her ayarın başındaki `~` açılır. Dosya grup ya da başkaları tarafından okunabiliyorsa kutu açılmaz (`chmod 600`).
-- `plan_into`: kutudaki öğeler boşluk tuşuyla hedef kutuya "planıma al" olarak taşınır. Kaynak plugin öğeyi artık listelemiyorsa (iş kapandı) bağlı hedef öğe de bitmiş sayılır. Kaynak `list` hata verdiğinde hiçbir görev kapanmaz.
-- `capture_into`, `capture_refs` ve `capture_label_aliases` aşağıdaki `capture` komutunun ayarlarıdır.
+- `row` and `col` are the grid position. Optional `width` and `height` stretch a box over several cells.
+- The `config` table is passed to the plugin as is. Each plugin's keys are listed in its README.
+- Secrets never go in the profile; only a file path (`token_file`, `key_file`) does. A leading `~` is expanded in every key ending in `_file`. If the file is readable by group or others, the box does not open (`chmod 600`).
+- `plan_into`: in this box, the space key moves an item into the target box as "add to my plan". When the source plugin stops listing the item (the issue was closed), the linked target item counts as done too. No task is closed when the source `list` call fails.
+- `capture_into`, `capture_refs` and `capture_label_aliases` configure the `capture` command below.
 
-## Ekran ve tuşlar
+## Screen and keys
 
-Ana ekranda profildeki kutular ızgarada durur. Kutu başlığı öğe sayısını ve gecikmiş sayısını yazar, gecikmiş öğe kırmızıdır. En alt satır o anki ekranın tuşlarını gösterir, `?` tam listeyi açar. Çift tık ya da `Enter` kutuyu büyütür, `Esc` geri döner.
+The main screen shows the profile's boxes in a grid. A box title shows its item count and how many are overdue; overdue items are red. The bottom line shows the keys for the current screen, and `?` opens the full list. Double click or `Enter` zooms a box, `Esc` goes back.
 
-| Tuş | Ana ekran | Büyütülmüş kutu |
+| Key | Main screen | Zoomed box |
 |---|---|---|
-| `a` | not al (`capture_into` kutusuna) | aynı |
-| `x` | seçili öğe bitti | aynı |
-| `u` | seçili öğenin yıldızını kaldır (Zulip) | aynı |
-| `m` | taşı: hedef kutu listesi açılır | aynı |
-| `boşluk` | yok | `plan_into` olan kutuda planıma al / çıkar |
-| `o` | linki tarayıcıda aç | aynı |
-| `/` | yok | ara |
-| `Tab` | sonraki kutu | yok |
-| `?`, `q`, `Esc` | yardım, çık, geri | yardım, çık, geri |
+| `a` | take a note (into the `capture_into` box) | same |
+| `x` | mark the selected item done | same |
+| `u` | unstar the selected item (Zulip) | same |
+| `m` | move: opens the list of target boxes | same |
+| `space` | none | add to / remove from plan in a box with `plan_into` |
+| `o` | open the link in the browser | same |
+| `/` | none | search |
+| `Tab` | next box | none |
+| `?`, `q`, `Esc` | help, quit, back | help, quit, back |
 
-Fare:
+Mouse:
 
-- Tekerlek kutunun içinde kaydırır.
-- Tıklama öğeyi seçer, çift tıklama kutuyu büyütür.
-- Öğeyi başka kutuya sürükleyip bırakmak hedef plugin'e `drop` gönderir. Örneğin Zulip ya da mail öğesini Vikunja kutusuna bırakınca görev olur.
-- Aynı kutu içinde sürüklemek sırayı değiştirir. En üstteki en önceliklidir.
+- The wheel scrolls inside a box.
+- A click selects an item, a double click zooms the box.
+- Dragging an item onto another box sends `drop` to the target plugin. For example, dropping a Zulip or mail item onto a Vikunja box turns it into a task.
+- Dragging within the same box reorders it. The top item has the highest priority.
 
-## Dışarıdan not alma
+## Capturing notes from outside
 
 ```sh
-focusdeck capture "R45539 arandı #tel yarın 14:00 // ayrıntı"
+focusdeck capture "R12345 called #tel yarın 14:00 // details"
 focusdeck capture
 ```
 
-Metin verilmezse `capture_command` tek satır sorar. Not profildeki `capture_into` kutusuna gider; başlık boşsa ya da plugin'e ulaşılamıyorsa komut 1 ile çıkar. Ulaşılamayan not `~/.local/state/focusdeck/capture-queue.jsonl` dosyasında bekler ve sonraki başarılı yakalamada gönderilir. Bir pencere yöneticisi kısayoluna (örneğin Hyprland'de `F9`) bağlamak için `focusdeck capture` yeterlidir.
+Without text, `capture_command` asks for one line. The note goes to the profile's `capture_into` box. The command exits with 1 if the title is empty or the plugin cannot be reached. A note that could not be delivered waits in `~/.local/state/focusdeck/capture-queue.jsonl` and is sent with the next successful capture. To bind it to a window manager shortcut (for example `F9` in Hyprland), `focusdeck capture` is enough.
 
-Yazım kuralları:
+Syntax:
 
-- `//` sonrası açıklamadır.
-- Başlığın son kelimesi `30dk` ya da `2s` ise şimdiden o kadar sonra, `SS:DD` ise bugün o saat (geçmişse yarın) son tarih ve hatırlatma olur. Önüne `yarın` ya da gün kısaltması (`pzt`, `sal`, `çar`, `per`, `cum`, `cmt`, `paz`) konabilir.
-- İlk `@ad` kimden bilgisidir. `#kelime` etikettir ve `capture_label_aliases` ile çevrilir. Yalnız rakamdan oluşan `#123` düz metin kalır.
-- `capture_refs` önekiyle başlayıp en az iki rakamla süren kelime (`R45539`) linke çevrilir.
-- Geri kalan kelimeler başlıktır.
+- Everything after `//` is the description.
+- If the last word of the title is `30dk` (minutes) or `2s` (hours), the due date and reminder are that long from now; if it is `HH:MM`, they are today at that time (tomorrow if already past). It can be preceded by `yarın` (tomorrow) or a day abbreviation (`pzt`, `sal`, `çar`, `per`, `cum`, `cmt`, `paz`, Monday to Sunday).
+- The first `@name` is who it is from. `#word` is a label, translated through `capture_label_aliases`. A digits-only `#123` stays plain text.
+- A word that starts with a `capture_refs` prefix followed by at least two digits (`R12345`) becomes a link.
+- The remaining words are the title.
 
-## Hatırlatma
+## Reminders
 
 ```sh
 focusdeck remind
 focusdeck remind --send
 ```
 
-Hatırlatma destekleyen plugin'lerden son 12 saatin hatırlatmalarını ister. `remind` saati gelenleri yazdırır; `--send` bunları `notify-send -u critical` ile bildirim olarak gösterir. Gösterilenler `~/.local/state/focusdeck/reminded.json` dosyasına yazılır, aynı hatırlatma bir daha gösterilmez. Dakikada bir çalışan bir systemd timer ya da cron girdisi `focusdeck remind --send` çalıştırabilir.
+Asks plugins that support reminders for the reminders of the last 12 hours. `remind` prints the ones that are due; `--send` shows them as notifications through `notify-send -u critical`. Shown reminders are recorded in `~/.local/state/focusdeck/reminded.json` and never shown again. A systemd timer or cron entry can run `focusdeck remind --send` every minute.
 
-## Plugin protokolü
+## Plugin protocol
 
-Plugin, çekirdeğin her kutu için bir kez başlatıp açık tuttuğu bir programdır. Satır başına bir JSON mesaj: stdin'den istek, stdout'tan cevap. stderr çekirdeğin log dosyasına yazılır. Protokol sürümü 1.
+A plugin is a program the core starts once per box and keeps running. One JSON message per line: requests on stdin, responses on stdout. stderr goes to the core's log file. Protocol version 1.
 
 ```json
 {"id": 7, "method": "list", "params": {"view": "full"}}
@@ -130,36 +140,36 @@ Plugin, çekirdeğin her kutu için bir kez başlatıp açık tuttuğu bir progr
 {"id": 8, "error": {"message": "401 Unauthorized"}}
 ```
 
-| Yöntem | Parametre | Cevap |
+| Method | Parameters | Response |
 |---|---|---|
-| `describe` | yok | `name`, `version`, `protocol`, `actions`, `accepts_drop`, `reminders` |
-| `configure` | profildeki `config` tablosu | boş, hatalı ayarda `error` |
-| `list` | `view`: `summary` ya da `full` | `items` |
-| `action` | `item`, `action` (`done`, `delete`, `move`, `reorder`, `unstar`), `args` | güncellenmiş öğe ya da boş |
-| `drop` | `item`, `from` | oluşturulan ya da taşınan öğe |
-| `reminders` | `since` (RFC 3339) | `at` ve `item` çiftleri |
+| `describe` | none | `name`, `version`, `protocol`, `actions`, `accepts_drop`, `reminders` |
+| `configure` | the profile's `config` table | empty, `error` on bad settings |
+| `list` | `view`: `summary` or `full` | `items` |
+| `action` | `item`, `action` (`done`, `delete`, `move`, `reorder`, `unstar`), `args` | the updated item or empty |
+| `drop` | `item`, `from` | the created or moved item |
+| `reminders` | `since` (RFC 3339) | pairs of `at` and `item` |
 
-- İstek başına zaman aşımı 15 saniyedir. Zaman aşımı, JSON olmayan satır ya da süreç çökmesi kutuda kırmızı bir satır olarak görünür; çekirdek plugin'i bir sonraki yenilemede yeniden başlatır, öteki kutular etkilenmez.
-- `describe` cevabındaki `protocol` çekirdeğin bildiği sürümden farklıysa kutu açılmaz.
-- Çekirdek yalnız `*_file` yolunu ve izinlerini denetler; şifreyi plugin dosyadan kendisi okur, değer çekirdekten geçmez.
-- Plugin istenen dilde yazılabilir, tek şart protokole uymak.
+- Each request times out after 15 seconds. A timeout, a non-JSON line or a crashed process shows up as a red line in the box; the core restarts the plugin on the next refresh, and other boxes are not affected.
+- If `protocol` in the `describe` response differs from the version the core knows, the box does not open.
+- The core only checks the `*_file` path and its permissions; the plugin reads the secret from the file itself, so the value never passes through the core.
+- A plugin can be written in any language, as long as it speaks the protocol.
 
-Rust ile plugin yazanlar için tipler ve `Plugin` trait'iyle satır döngüsünü yürüten `serve` yardımcısı `focusdeck-protocol` crate'inde durur:
+For plugins written in Rust, the `focusdeck-protocol` crate has the types, the `Plugin` trait and a `serve` helper that runs the line loop:
 
 ```toml
 [dependencies]
 focusdeck-protocol = { git = "https://github.com/omertahaoztop/focusdeck", tag = "v0.1.0" }
 ```
 
-`Plugin` trait'ini uygulayıp `focusdeck_protocol::serve(plugin, stdin.lock(), stdout)` çağırmak yeter.
+Implement the `Plugin` trait and call `focusdeck_protocol::serve(plugin, stdin.lock(), stdout)`.
 
-## Geliştirme
+## Development
 
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## Lisans
+## License
 
-MIT, bkz. [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
