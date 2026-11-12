@@ -83,7 +83,8 @@ async fn uppercase_index_sha_is_accepted() {
         .await
         .unwrap();
     let manifest = std::fs::read_to_string(plugins.path().join("redmine.toml")).unwrap();
-    assert!(manifest.contains(&sha256_hex(BIN)));
+    let manifest: toml::Table = toml::from_str(&manifest).unwrap();
+    assert_eq!(manifest["sha256"].as_str(), Some(sha256_hex(BIN).as_str()));
 }
 
 #[tokio::test]
@@ -116,31 +117,74 @@ async fn checksum_mismatch_writes_nothing() {
     assert!(entries(plugins.path()).is_empty());
 }
 
+const NEW_BIN: &[u8] = b"#!/bin/sh\nexit 1\n";
+
+fn registry_with_new_bin(dir: &Path) -> String {
+    std::fs::write(dir.join("redmine"), NEW_BIN).unwrap();
+    std::fs::write(
+        dir.join("index.toml"),
+        index_text(&format!("file://{}", dir.join("redmine").display()))
+            .replace(&sha256_hex(BIN), &sha256_hex(NEW_BIN))
+            .replace("0.1.0", "0.2.0"),
+    )
+    .unwrap();
+    reg_url(dir)
+}
+
 #[tokio::test]
-async fn failed_reinstall_keeps_previous_version() {
+async fn failed_reinstall_keeps_the_previous_plugin() {
     let reg = tempfile::tempdir().unwrap();
     let plugins = tempfile::tempdir().unwrap();
     install::install(&[good_registry(reg.path())], "redmine", plugins.path())
         .await
         .unwrap();
-    write_registry(
-        reg.path(),
-        "redmine",
-        "0.2.0",
-        1,
-        &"0".repeat(64),
-        current_target(),
-    );
-    install::install(&[reg_url(reg.path())], "redmine", plugins.path())
+    let old_manifest = std::fs::read(plugins.path().join("redmine.toml")).unwrap();
+    let registry = registry_with_new_bin(reg.path());
+
+    // a directory where the manifest part file goes fails the staging step
+    let block = plugins.path().join(".redmine.toml.part");
+    std::fs::create_dir(&block).unwrap();
+    install::install(std::slice::from_ref(&registry), "redmine", plugins.path())
         .await
         .unwrap_err();
     assert_eq!(std::fs::read(plugins.path().join("redmine")).unwrap(), BIN);
-    assert!(
-        std::fs::read_to_string(plugins.path().join("redmine.toml"))
-            .unwrap()
-            .contains("0.1.0")
+    assert_eq!(
+        std::fs::read(plugins.path().join("redmine.toml")).unwrap(),
+        old_manifest
     );
+    std::fs::remove_dir(&block).unwrap();
     assert_eq!(entries(plugins.path()), ["redmine", "redmine.toml"]);
+
+    // a manifest that cannot be replaced fails after the binary was swapped
+    std::fs::remove_file(plugins.path().join("redmine.toml")).unwrap();
+    let manifest_dir = plugins.path().join("redmine.toml");
+    std::fs::create_dir(&manifest_dir).unwrap();
+    std::fs::write(manifest_dir.join("x"), "x").unwrap();
+    install::install(&[registry], "redmine", plugins.path())
+        .await
+        .unwrap_err();
+    assert_eq!(std::fs::read(plugins.path().join("redmine")).unwrap(), BIN);
+    assert_eq!(entries(plugins.path()), ["redmine", "redmine.toml"]);
+}
+
+#[tokio::test]
+async fn failed_first_install_leaves_nothing() {
+    let reg = tempfile::tempdir().unwrap();
+    let plugins = tempfile::tempdir().unwrap();
+    let manifest_dir = plugins.path().join("redmine.toml");
+    std::fs::create_dir(&manifest_dir).unwrap();
+    std::fs::write(manifest_dir.join("x"), "x").unwrap();
+    install::install(&[good_registry(reg.path())], "redmine", plugins.path())
+        .await
+        .unwrap_err();
+    assert_eq!(entries(plugins.path()), ["redmine.toml"]);
+
+    std::fs::remove_dir_all(&manifest_dir).unwrap();
+    std::fs::create_dir(plugins.path().join(".redmine.toml.part")).unwrap();
+    install::install(&[reg_url(reg.path())], "redmine", plugins.path())
+        .await
+        .unwrap_err();
+    assert_eq!(entries(plugins.path()), [".redmine.toml.part"]);
 }
 
 #[tokio::test]
@@ -271,7 +315,11 @@ async fn unsafe_names_are_rejected_before_any_io() {
         let err = install::install(&["file:///yok/index.toml".to_string()], bad, &plugin_dir)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("invalid plugin name"), "{bad:?}");
+        assert_eq!(
+            err.to_string(),
+            format!("invalid plugin name: {bad:?}"),
+            "{bad:?}"
+        );
         assert!(install::remove(&plugin_dir, bad).is_err(), "{bad:?}");
     }
     assert!(!plugin_dir.exists());
@@ -319,11 +367,9 @@ fn plugin_install_and_remove_refuse_local() {
         &paths,
         vec!["http://127.0.0.1:1/index.toml".into()],
     );
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("comes with focusdeck")
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "local comes with focusdeck, there is nothing to install"
     );
     assert!(out.is_empty() && err.is_empty());
     let (result, out, err) = run(
@@ -333,11 +379,9 @@ fn plugin_install_and_remove_refuse_local() {
         &paths,
         vec![],
     );
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("comes with focusdeck")
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "local comes with focusdeck and cannot be removed"
     );
     assert!(out.is_empty() && err.is_empty(), "{out}{err}");
     assert!(!paths.plugin_dir().exists());
@@ -404,11 +448,115 @@ async fn http_fetch_sends_user_agent_and_fails_on_non_2xx() {
     let err = install::fetch(&format!("{}/yok", server.url()))
         .await
         .unwrap_err();
-    let text = format!("{err:#}");
-    assert!(text.contains("404"), "{text}");
-    assert!(!text.contains("gizli gövde"));
+    let url = format!("{}/yok", server.url());
+    assert_eq!(
+        format!("{err:#}"),
+        format!("could not download {url}: HTTP 404")
+    );
     ok.assert_async().await;
     missing.assert_async().await;
+}
+
+fn index_text(url: &str) -> String {
+    format!(
+        "[[plugin]]\nname = \"redmine\"\ndescription = \"d\"\nversion = \"0.1.0\"\nprotocol = 1\n[plugin.targets.{}]\nurl = \"{url}\"\nsha256 = \"{}\"\n",
+        current_target(),
+        sha256_hex(BIN)
+    )
+}
+
+const INSECURE: &str = "refusing plain http (use https): ";
+
+#[tokio::test]
+async fn plain_http_to_a_remote_host_is_refused() {
+    let url = "http://plugins.example/index.toml";
+    let err = install::fetch(url).await.unwrap_err();
+    assert_eq!(err.to_string(), format!("{INSECURE}{url}"));
+
+    let plugins = tempfile::tempdir().unwrap();
+    let err = install::install(&[url.to_owned()], "redmine", plugins.path())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "no such plugin in the registries: redmine (unreachable registries: {url}: {INSECURE}{url})"
+        )
+    );
+
+    let reg = tempfile::tempdir().unwrap();
+    let download = "http://plugins.example/redmine";
+    std::fs::write(reg.path().join("index.toml"), index_text(download)).unwrap();
+    let err = install::install(&[reg_url(reg.path())], "redmine", plugins.path())
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), format!("{INSECURE}{download}"));
+    assert!(entries(plugins.path()).is_empty());
+}
+
+#[tokio::test]
+async fn loopback_http_is_allowed() {
+    let mut server = mockito::Server::new_async().await;
+    let download = format!("{}/redmine", server.url());
+    let _index = server
+        .mock("GET", "/index.toml")
+        .with_body(index_text(&download))
+        .create_async()
+        .await;
+    let _bin = server
+        .mock("GET", "/redmine")
+        .with_body(BIN)
+        .create_async()
+        .await;
+    let plugins = tempfile::tempdir().unwrap();
+    install::install(
+        &[format!("{}/index.toml", server.url())],
+        "redmine",
+        plugins.path(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(plugins.path().join("redmine")).unwrap(), BIN);
+    for url in ["http://[::1]:9/x", "http://localhost:9/x"] {
+        let err = install::fetch(url).await.unwrap_err();
+        assert_ne!(err.to_string(), format!("{INSECURE}{url}"), "{url}");
+    }
+}
+
+#[tokio::test]
+async fn remote_index_cannot_point_at_a_local_file() {
+    let mut server = mockito::Server::new_async().await;
+    let _index = server
+        .mock("GET", "/index.toml")
+        .with_body(index_text("file:///etc/hostname"))
+        .create_async()
+        .await;
+    let registry = format!("{}/index.toml", server.url());
+    let plugins = tempfile::tempdir().unwrap();
+    let err = install::install(std::slice::from_ref(&registry), "redmine", plugins.path())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!("the index at {registry} points redmine at a local file")
+    );
+    assert!(entries(plugins.path()).is_empty());
+}
+
+#[tokio::test]
+async fn redirect_to_plain_http_is_refused() {
+    let mut server = mockito::Server::new_async().await;
+    let target = "http://plugins.example/index.toml";
+    let _redirect = server
+        .mock("GET", "/index.toml")
+        .with_status(302)
+        .with_header("location", target)
+        .create_async()
+        .await;
+    let err = install::fetch(&format!("{}/index.toml", server.url()))
+        .await
+        .unwrap_err();
+    assert_eq!(err.root_cause().to_string(), format!("{INSECURE}{target}"));
 }
 
 #[test]
@@ -527,7 +675,7 @@ fn plugin_install_list_remove_flow() {
         regs.clone(),
     );
     result.unwrap();
-    assert!(out.contains("redmine") && out.contains("0.1.0"), "{out}");
+    assert_eq!(out, "redmine 0.1.0 installed\n");
 
     let (result, out, _) = run(PluginCommand::List, &paths, regs.clone());
     result.unwrap();

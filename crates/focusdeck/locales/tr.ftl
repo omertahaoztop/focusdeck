@@ -134,7 +134,7 @@ install-read-failed = { $path } okunamadı
 install-unsupported-url = desteklenmeyen adres (yalnız http, https, file): { $url }
 install-file-too-large = dosya çok büyük
 install-too-many-redirects = çok fazla yönlendirme
-install-redirect-downgrade = https adresinden http adresine yönlendirme reddedildi
+install-insecure-url = düz http reddedildi (https kullan): { $url }
 install-http-client = HTTP istemcisi kurulamadı
 install-download-failed = { $url } indirilemedi
 install-http-status = { $url } indirilemedi: HTTP { $status }
@@ -155,6 +155,8 @@ install-delete-failed = { $path } silinemedi
 install-not-installed = plugin kurulu değil: { $name }
 install-local-builtin = local focusdeck ile birlikte gelir, kurulacak bir şey yok
 install-local-not-removable = local focusdeck ile birlikte gelir, kaldırılamaz
+install-remote-file-target = { $registry } adresindeki dizin { $name } için yerel bir dosya gösteriyor
+install-binary-changed = { $name } artık manifestiyle uyuşmuyor; "focusdeck plugin install { $name }" komutunu yeniden çalıştır
 
 # Notification titles and bodies of "focusdeck capture" and the rofi prompt label.
 capture-prompt = Not
