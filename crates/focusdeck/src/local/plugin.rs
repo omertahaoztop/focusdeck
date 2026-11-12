@@ -146,7 +146,7 @@ impl Local {
                 Some(position) => position,
                 None => {
                     renumber(items, list);
-                    place_between(&others_of(items), wanted).unwrap_or(POSITION_STEP)
+                    place_between(&others_of(items), wanted).ok_or_else(|| item_missing(id))?
                 }
             };
             items[index].position = position;

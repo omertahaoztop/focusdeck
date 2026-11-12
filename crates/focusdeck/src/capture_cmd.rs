@@ -94,7 +94,6 @@ pub async fn run(
         popped: 0,
         own,
         queued_sent: 0,
-        own_sent: false,
     };
 
     let outcome = tokio::select! {
@@ -108,6 +107,10 @@ pub async fn run(
         (Outcome::Done(Ok(())), committed) => {
             if let Err(e) = committed {
                 notify::log_line(&log, &format!("could not update the queue: {e}"));
+            }
+            if handed_over(pushed.is_ok(), progress.own) {
+                notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &shown, false);
+                return Ok(0);
             }
             let body = if progress.queued_sent > 0 {
                 format!(
@@ -151,6 +154,11 @@ pub async fn run(
     Ok(i32::from(failed))
 }
 
+// A concurrent run took the queue file that holds this note, so that run delivers it.
+fn handed_over(pushed: bool, own: Option<usize>) -> bool {
+    pushed && own.is_none()
+}
+
 enum Outcome {
     Done(Result<(), String>),
     Interrupted,
@@ -161,7 +169,6 @@ struct Progress {
     popped: usize,
     own: Option<usize>,
     queued_sent: usize,
-    own_sent: bool,
 }
 
 struct Stop {
@@ -269,9 +276,7 @@ async fn deliver(
                 host.call::<_, Item>("drop", &drop)
                     .await
                     .map_err(|e| e.to_string())?;
-                if is_own {
-                    progress.own_sent = true;
-                } else {
+                if !is_own {
                     progress.queued_sent += 1;
                 }
             }
@@ -297,6 +302,13 @@ mod tests {
         assert_eq!(count(&tr, 2), "kuyruktan 2 not gönderildi");
         assert_eq!(count(&en, 1), "1 note sent from the queue");
         assert_eq!(count(&en, 2), "2 notes sent from the queue");
+    }
+
+    #[test]
+    fn note_taken_by_another_run_is_handed_over() {
+        assert!(handed_over(true, None));
+        assert!(!handed_over(true, Some(0)));
+        assert!(!handed_over(false, Some(0)));
     }
 
     #[test]
