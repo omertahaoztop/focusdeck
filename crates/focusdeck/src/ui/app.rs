@@ -1,4 +1,4 @@
-use crate::i18n::{msg, t, t_args};
+use crate::i18n::{self, msg, t, t_args};
 use crate::links::{items_to_close, linked_ids, linked_item};
 use crate::profile::{BoxSpec, Profile};
 use crate::worker::BoxEvent;
@@ -95,9 +95,13 @@ pub struct App {
     pressed: Option<Pressed>,
     pointer: Option<(u16, u16, Option<Hit>)>,
     last_click: Option<(Pressed, Instant)>,
+    turkish_fold: bool,
 }
 
-pub fn fold_tr(s: &str) -> String {
+fn fold(s: &str, turkish: bool) -> String {
+    if !turkish {
+        return s.to_lowercase();
+    }
     s.chars()
         .flat_map(|c| match c {
             'İ' => 'i'.to_lowercase(),
@@ -105,6 +109,10 @@ pub fn fold_tr(s: &str) -> String {
             c => c.to_lowercase(),
         })
         .collect()
+}
+
+fn is_turkish(lang: &str) -> bool {
+    lang.split(['-', '_']).next() == Some("tr")
 }
 
 fn has_action(state: &BoxState, action: &str) -> bool {
@@ -155,6 +163,7 @@ impl App {
             pressed: None,
             pointer: None,
             last_click: None,
+            turkish_fold: is_turkish(i18n::current().lang()),
         }
     }
 
@@ -216,11 +225,12 @@ impl App {
         };
         match query {
             Some(query) => {
-                let needle = fold_tr(query);
+                let turkish = self.turkish_fold;
+                let needle = fold(query, turkish);
                 state
                     .items
                     .iter()
-                    .filter(|i| needle.is_empty() || fold_tr(&i.title).contains(&needle))
+                    .filter(|i| needle.is_empty() || fold(&i.title, turkish).contains(&needle))
                     .collect()
             }
             None => match self.plan_target(idx) {
@@ -925,6 +935,7 @@ mod tests {
     #[test]
     fn search_is_turkish_case_insensitive() {
         let mut app = loaded_app();
+        app.turkish_fold = true;
         for (query, expected) in [
             ("depo", "2"),
             ("istanbul", "1"),
@@ -932,6 +943,42 @@ mod tests {
             ("İSTANBUL", "1"),
             ("IŞIK", "3"),
         ] {
+            app.mode = Mode::Search {
+                zoom: REDMINE,
+                query: query.into(),
+            };
+            assert_eq!(ids(&app, REDMINE), vec![expected], "query {query}");
+        }
+    }
+
+    #[test]
+    fn search_is_plain_case_insensitive_in_english() {
+        let mut app = loaded_app();
+        app.boxes[REDMINE].items = vec![item("1", "Invoice due"), item("2", "invoice paid")];
+        for query in ["invoice", "INVOICE", "Invoice"] {
+            app.mode = Mode::Search {
+                zoom: REDMINE,
+                query: query.into(),
+            };
+            assert_eq!(ids(&app, REDMINE), vec!["1", "2"], "query {query}");
+        }
+    }
+
+    #[test]
+    fn turkish_fold_maps_dotted_and_dotless_i() {
+        assert_eq!(fold("Iİ", true), "ıi");
+        assert_eq!(fold("Iİ", false), "ii\u{307}");
+        assert!(is_turkish("tr"));
+        assert!(is_turkish("tr-TR"));
+        assert!(!is_turkish("en"));
+    }
+
+    #[test]
+    fn turkish_search_matches_dotted_and_dotless_i() {
+        let mut app = loaded_app();
+        app.turkish_fold = true;
+        app.boxes[REDMINE].items = vec![item("1", "İş"), item("2", "Işık")];
+        for (query, expected) in [("iş", "1"), ("ışık", "2"), ("ı", "2")] {
             app.mode = Mode::Search {
                 zoom: REDMINE,
                 query: query.into(),

@@ -67,7 +67,7 @@ fn describe_roundtrip() {
 fn unknown_method_is_error() {
     let r = run_one("{\"id\":2,\"method\":\"yok\"}\n");
     assert_eq!(r.id, 2);
-    assert_eq!(r.error.unwrap().message, "bilinmeyen yöntem: yok");
+    assert_eq!(r.error.unwrap().message, "unknown method: yok");
     assert!(r.result.is_none());
 }
 
@@ -77,8 +77,8 @@ fn bad_json_line_is_error_with_id_zero() {
     assert_eq!(lines.len(), 1);
     let r: Response = serde_json::from_str(&lines[0]).unwrap();
     assert_eq!(r.id, 0);
-    assert!(r.error.unwrap().message.starts_with("geçersiz istek: "));
-    assert!(lines[0].starts_with("{\"id\":0,\"error\":{\"message\":\"geçersiz istek: "));
+    assert!(r.error.unwrap().message.starts_with("invalid request: "));
+    assert!(lines[0].starts_with("{\"id\":0,\"error\":{\"message\":\"invalid request: "));
 }
 
 #[test]

@@ -44,7 +44,7 @@ pub fn serve<P: Plugin>(
                     Err(message) => failure(id, message),
                 }
             }
-            Err(e) => failure(0, format!("geçersiz istek: {e}")),
+            Err(e) => failure(0, format!("invalid request: {e}")),
         };
         serde_json::to_writer(&mut output, &response)?;
         output.write_all(b"\n")?;
@@ -62,7 +62,7 @@ fn failure(id: u64, message: String) -> Response {
 }
 
 fn params<T: DeserializeOwned>(value: Value) -> Result<T, String> {
-    serde_json::from_value(value).map_err(|e| format!("geçersiz parametre: {e}"))
+    serde_json::from_value(value).map_err(|e| format!("invalid params: {e}"))
 }
 
 fn to_value<T: Serialize>(value: T) -> Result<Value, String> {
@@ -86,6 +86,6 @@ fn dispatch<P: Plugin>(plugin: &mut P, req: Request) -> Result<Value, String> {
             let reminders = plugin.reminders(params(req.params)?)?;
             to_value(RemindersResult { reminders })
         }
-        other => Err(format!("bilinmeyen yöntem: {other}")),
+        other => Err(format!("unknown method: {other}")),
     }
 }

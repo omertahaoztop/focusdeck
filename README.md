@@ -114,7 +114,7 @@ Mouse:
 ## Capturing notes from outside
 
 ```sh
-focusdeck capture "R12345 called #tel yarın 14:00 // details"
+focusdeck capture "R12345 called #tel tomorrow 14:00 // details"
 focusdeck capture
 ```
 

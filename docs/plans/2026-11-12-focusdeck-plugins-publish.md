@@ -136,7 +136,7 @@ Liste: `GET {api}/messages?q=is:starred&maxResults=100` ve `nextPageToken` biten
 **Files:**
 - Create: `focusdeck-plugins/tools/focusdeck-index/Cargo.toml`, `src/main.rs`, `src/lib.rs`
 - Create: `focusdeck-plugins/.github/workflows/ci.yml`, `.github/workflows/release.yml`, `index.toml` (boş dosya), `LICENSE` (MIT, `Ömer Taha Öztop`)
-- Modify: `focusdeck-plugins/README.md`, `focusdeck-plugins/plugins/vikunja/tests/vikunja.rs` (`redmine.example.com` → `redmine.example.com`)
+- Modify: `focusdeck-plugins/README.md`, `focusdeck-plugins/plugins/vikunja/tests/vikunja.rs` (adresler zaten anonimleştirilmiş, değişiklik yok)
 
 **Interfaces:**
 - Produces: `focusdeck_index::{Entry, Target, set_entry(index: &str, entry: Entry) -> Result<String, String>, check_tag(tag: &str, name: &str, version: &str) -> Result<(), String>}`; ikili alt komutları `focusdeck-index set --index <dosya> --name <ad> --description <metin> --version <sürüm> --target <üçlü>=<url>,<sha256>...` (dosyayı yerinde yazar) ve `focusdeck-index check-tag --tag <etiket> --name <ad> --version <sürüm>`.
@@ -160,7 +160,7 @@ README: kurulum (`focusdeck plugin install <ad>`), dört plugin'in ayar anahtarl
 
 **Files:**
 - Create: `focusdeck/README.md`, `focusdeck/LICENSE` (MIT, `Ömer Taha Öztop`), `focusdeck/.github/workflows/ci.yml`
-- Modify: `focusdeck/crates/focusdeck/src/capture.rs:215,317`, `focusdeck/crates/focusdeck/src/profile.rs:206-246` (`redmine.example.com` → `redmine.example.com`, `vikunja.example.com` → `vikunja.example.com`)
+- Modify: `focusdeck/crates/focusdeck/src/capture.rs:215,317`, `focusdeck/crates/focusdeck/src/profile.rs:206-246` (adresler zaten anonimleştirilmiş, değişiklik yok)
 
 **Interfaces:**
 - Produces: GitHub'a gönderilmeye hazır çekirdek; `focusdeck-protocol` sürümü `0.1.0` kalır.
