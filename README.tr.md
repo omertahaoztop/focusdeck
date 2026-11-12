@@ -210,7 +210,7 @@ Plugin, çekirdeğin her kutu için bir kez başlatıp açık tuttuğu bir progr
 | `drop` | `item`, `from` | oluşturulan ya da taşınan öğe |
 | `reminders` | `since` (RFC 3339) | `at` ve `item` çiftleri |
 
-- İstek başına zaman aşımı 15 saniyedir. Zaman aşımı, JSON olmayan satır, 16 MiB'den uzun satır ya da süreç çökmesi kutuda kırmızı bir satır olarak görünür; çekirdek plugin'i bir sonraki yenilemede yeniden başlatır, öteki kutular etkilenmez.
+- İstek başına zaman aşımı 15 saniyedir. Zaman aşımı, JSON olmayan satır, 16 MiB'tan uzun satır ya da süreç çökmesi kutuda kırmızı bir satır olarak görünür; çekirdek plugin'i bir sonraki yenilemede yeniden başlatır, öteki kutular etkilenmez.
 - `describe` cevabındaki `protocol` çekirdeğin bildiği sürümden farklıysa kutu açılmaz.
 - Çekirdek yalnız `*_file` yolunu ve izinlerini denetler; şifreyi plugin dosyadan kendisi okur, değer çekirdekten geçmez.
 - Çekirdek her plugin'i istenen arayüz dilini `FOCUSDECK_LANG` ortam değişkeninde (örneğin `tr`) vererek başlatır, dil yoksa değişkeni kaldırır. Plugin'in o dilde çevirisi yoksa İngilizce kullanılır.
@@ -230,7 +230,7 @@ focusdeck-protocol = { git = "https://github.com/omertahaoztop/focusdeck", tag =
 - Plugin dizinleri ve plugin dosyaları HTTPS üzerinden indirilir. Düz `http://` reddedilir, yönlendirme hedefi olarak da. İstisna, dizini yerelde denemek için `127.0.0.1`, `[::1]` ve `localhost` adresleridir. Ağdan indirilen bir dizin plugin'i yerel bir dosyaya yönlendiremez.
 - `plugin install` binary'nin sha256'sını yanındaki manifest dosyasına yazar. Bir kutu o plugin'i başlatmadan önce focusdeck binary'yi manifest ile karşılaştırır, değişmiş bir binary'yi başlatmayıp hata gösterir. Elle kopyalanan plugin'in manifest'i olmadığından denetlenmez.
 - Log, yakalama kuyruğu, hatırlatma kaydı ve `local.json` yalnız sahibinin okuyup yazabileceği şekilde (0600) oluşturulur.
-- `~/.local/state/focusdeck/focusdeck.log` 1 MiB'yi geçince `focusdeck.log.1` adına taşınır, yani en çok 2 MiB kadar yer tutar.
+- `~/.local/state/focusdeck/focusdeck.log` 1 MiB'ı geçince `focusdeck.log.1` adına taşınır, yani en çok 2 MiB kadar yer tutar.
 
 ## Çeviri
 
