@@ -148,12 +148,18 @@ impl PluginHost {
         Ok(describe)
     }
 
-    fn spawn(&self) -> Result<Proc, HostError> {
+    fn command(&self) -> Command {
         let mut command = Command::new(&self.exe);
-        if let Some(lang) = &self.lang {
-            command.env("FOCUSDECK_LANG", lang);
-        }
-        let mut child = command
+        match &self.lang {
+            Some(lang) => command.env("FOCUSDECK_LANG", lang),
+            None => command.env_remove("FOCUSDECK_LANG"),
+        };
+        command
+    }
+
+    fn spawn(&self) -> Result<Proc, HostError> {
+        let mut child = self
+            .command()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -244,4 +250,25 @@ async fn open_log(path: &PathBuf) -> Option<tokio::fs::File> {
         .open(path)
         .await
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lang_env(host: &PluginHost) -> Option<Option<String>> {
+        host.command()
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == "FOCUSDECK_LANG")
+            .map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+    }
+
+    #[test]
+    fn language_env_is_set_or_cleared() {
+        let host = PluginHost::new("x".into(), "plugin".into(), Value::Null, "log".into());
+        assert_eq!(lang_env(&host), Some(None));
+        let host = host.with_lang(Some("tr-TR".into()));
+        assert_eq!(lang_env(&host), Some(Some("tr-TR".into())));
+    }
 }
