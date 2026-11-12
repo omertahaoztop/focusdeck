@@ -15,7 +15,7 @@ use crate::i18n::{self, msg, t, t_args};
 use crate::notify;
 use crate::paths::Paths;
 use crate::profile::Profile;
-use crate::queue::{Queue, Queued};
+use crate::queue::{Queue, Queued, Taken};
 use crate::ui::run::build_host;
 
 pub async fn run(
@@ -72,13 +72,13 @@ pub async fn run(
         Ok(taken) => taken,
         Err(e) => {
             notify::log_line(&log, &format!("could not read the queue: {e}"));
-            let title = if pushed.is_ok() {
-                t(msg::CAPTURE_QUEUED_TITLE)
-            } else {
-                t(msg::CAPTURE_LOST_TITLE)
-            };
-            notify::send_logged(&log, &title, &e.to_string(), true);
-            return Ok(1);
+            if pushed.is_ok() {
+                let title = t(msg::CAPTURE_QUEUED_TITLE);
+                notify::send_logged(&log, &title, &e.to_string(), true);
+                return Ok(1);
+            }
+            // With no queue to fall back on, sending now is the only way the note survives.
+            Taken::default()
         }
     };
     let mut items = std::mem::take(&mut taken.items);

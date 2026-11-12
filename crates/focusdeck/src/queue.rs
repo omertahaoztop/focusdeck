@@ -21,6 +21,7 @@ pub struct Queue {
 }
 
 // The aside files stay locked for as long as this lives, which marks them as in flight.
+#[derive(Default)]
 pub struct Taken {
     pub items: Vec<Queued>,
     asides: Vec<(PathBuf, File)>,
@@ -82,6 +83,9 @@ impl Queue {
     }
 
     pub fn commit(&self, taken: Taken, unsent: &[Queued]) -> io::Result<()> {
+        if unsent.is_empty() && taken.asides.is_empty() {
+            return Ok(());
+        }
         let _lock = self.lock()?;
         self.append_locked(unsent)?;
         for (path, _file) in &taken.asides {

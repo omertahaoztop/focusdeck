@@ -390,6 +390,30 @@ fn missing_plugin_binary_queues_the_note() {
 }
 
 #[test]
+fn unusable_state_dir_still_delivers_the_note() {
+    let env = Env::standard();
+    std::fs::write(env.state_dir(), "").unwrap();
+    let ran = env.run(&["capture", "log at"]);
+    assert_eq!(ran.code(), 0, "{}", ran.stderr());
+    assert_eq!(env.drops().len(), 1);
+    assert_eq!(env.notifications(), [["--", "added", "log at"]]);
+}
+
+#[test]
+fn unusable_state_dir_and_a_crashing_plugin_report_the_loss() {
+    let env = Env::standard();
+    std::fs::write(env.state_dir(), "").unwrap();
+    env.set_mode("crash");
+    assert_eq!(env.run(&["capture", "log at"]).code(), 1);
+    let notes = env.notifications();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(
+        notes[0][..4],
+        ["-u", "critical", "--", "focusdeck: note may be lost"]
+    );
+}
+
+#[test]
 fn successful_capture_flushes_the_queue_first() {
     let env = Env::standard();
     let q = env.queue();
