@@ -17,7 +17,7 @@ The data in the screenshots is made up.
 ## Install
 
 ```sh
-cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.2.0 --locked focusdeck
+cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.3.0 --locked focusdeck
 ```
 
 Ready-made plugins live in the [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) repository and are installed from its index:
@@ -37,7 +37,7 @@ local  (built-in)
 
 `local` is built into focusdeck and always ends the list. `plugin install local` and `plugin remove local` are refused.
 
-Plugins are written to `~/.local/share/focusdeck/plugins/<name>`. `install` checks the sha256 of the downloaded file against the index and deletes the file if it does not match. `remove` warns if a profile still uses the plugin.
+Plugins are written to `~/.local/share/focusdeck/plugins/<name>`. `install` checks the sha256 of the downloaded file against the index and deletes the file if it does not match. A reinstall that fails leaves the previous version in place. `remove` warns if a profile still uses the plugin.
 
 > Plugins run with your user's permissions; there is no sandbox. Make sure you trust a plugin's source before installing it.
 
@@ -64,6 +64,7 @@ minute = ["mins"]
 
 - `language`: the interface language, a code such as `en` or `tr` (see [Translating](#translating)). If it is missing, the core reads `LC_ALL`, `LC_MESSAGES` and `LANG`, in that order, and falls back to English. A cron job, systemd timer or window manager shortcut may not carry `LANG`, so set `language` if `capture` or `remind` run from one of them.
 - `capture_words`: extra spellings for the words `capture` understands, added to the active language's own. Each key takes a list; the keys are `tomorrow`, `minute`, `hour`, `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun`, and an unknown key is an error.
+- An unknown key anywhere in `config.toml` is an error, so a typo does not pass silently.
 - `default_profile`: the profile used when neither `--profile` nor `FOCUSDECK_PROFILE` is given.
 - `registries`: plugin index URLs, in order. If the same name appears in two indexes, the earlier one wins. Add your own index or a fork here.
 - `capture_command`: the command run to ask for one line when `capture` is called without text.
@@ -126,7 +127,7 @@ Notes are kept in `~/.local/share/focusdeck/local.json`, or in `$FOCUSDECK_DATA_
 
 ## Screen and keys
 
-The main screen shows the profile's boxes in a grid. A box title shows its item count and how many are overdue; overdue items are red. The bottom line shows the keys for the current screen, and `?` opens the full list. Double click or `Enter` zooms a box, `Esc` goes back.
+The main screen shows the profile's boxes in a grid. A box title shows its item count and how many are overdue; overdue items start with `!` and are red. The bottom line shows the keys for the current screen, and `?` opens the full list. Double click or `Enter` zooms a box, `Esc` goes back.
 
 | Key | Main screen | Zoomed box |
 |---|---|---|
@@ -134,13 +135,19 @@ The main screen shows the profile's boxes in a grid. A box title shows its item 
 | `x` | mark the selected item done | same |
 | `u` | unstar the selected item (Zulip) | same |
 | `m` | move: opens the list of target boxes | same |
-| `space` | none | add to / remove from plan in a box with `plan_into` |
-| `o` | open the link in the browser | same |
+| `space` | none | in a box with `plan_into`: add to the plan; on an item already in the plan the first press asks, the second deletes it from the plan |
+| `o` | open the link in the browser (`https`, `http` and `mailto` only) | same |
 | `/` | none | search |
-| `Tab` | next box | none |
+| `Tab`, `Shift+Tab` | next / previous box | none |
 | `←` `→` | box to the left / right | none |
 | `↑` `↓` | move in the list, at its top / bottom edge go to the box above / below | move in the list |
+| `PageUp` `PageDown` `Home` `End` | none | move by a page, jump to the first / last item |
+| `Shift+↑` `Shift+↓` | none | move the selected item up / down, where the plugin supports reordering |
 | `?`, `q`, `Esc` | help, quit, back | help, quit, back |
+
+Text pasted into the note or search field arrives as one line: line breaks become spaces. A paste on any other screen is ignored, so pasted text does not run as keys. This needs a terminal with bracketed paste, which current terminals have.
+
+With `NO_COLOR` set to a non-empty value focusdeck uses no colours: the selection is shown in reverse video and overdue items keep their `!`.
 
 Mouse:
 
@@ -156,7 +163,7 @@ focusdeck capture "R12345 called #tel tomorrow 14:00 // details"
 focusdeck capture
 ```
 
-Without text, `capture_command` asks for one line. The note goes to the profile's `capture_into` box. The command exits with 1 if the title is empty or the plugin cannot be reached. A note that could not be delivered waits in `~/.local/state/focusdeck/capture-queue.jsonl` and is sent with the next successful capture. To bind it to a window manager shortcut (for example `F9` in Hyprland), `focusdeck capture` is enough.
+Without text, `capture_command` asks for one line. The note goes to the profile's `capture_into` box. The command exits with 1 if the title is empty or the plugin cannot be reached. A note that could not be delivered waits in `~/.local/state/focusdeck/capture-queue.jsonl` and is sent with the next successful capture. The note is written to that file before delivery starts, so a `capture` that is killed or interrupted loses nothing. Delivery is at least once: after a kill a note can reach the plugin twice. To bind it to a window manager shortcut (for example `F9` in Hyprland), `focusdeck capture` is enough.
 
 Syntax:
 
@@ -203,7 +210,7 @@ A plugin is a program the core starts once per box and keeps running. One JSON m
 | `drop` | `item`, `from` | the created or moved item |
 | `reminders` | `since` (RFC 3339) | pairs of `at` and `item` |
 
-- Each request times out after 15 seconds. A timeout, a non-JSON line or a crashed process shows up as a red line in the box; the core restarts the plugin on the next refresh, and other boxes are not affected.
+- Each request times out after 15 seconds. A timeout, a non-JSON line, a line longer than 16 MiB or a crashed process shows up as a red line in the box; the core restarts the plugin on the next refresh, and other boxes are not affected.
 - If `protocol` in the `describe` response differs from the version the core knows, the box does not open.
 - The core only checks the `*_file` path and its permissions; the plugin reads the secret from the file itself, so the value never passes through the core.
 - The core starts each plugin with the requested interface language in the `FOCUSDECK_LANG` environment variable (for example `tr`) and removes the variable when no language is set. A plugin that has no translation for it uses English.
@@ -217,6 +224,13 @@ focusdeck-protocol = { git = "https://github.com/omertahaoztop/focusdeck", tag =
 ```
 
 Implement the `Plugin` trait and call `focusdeck_protocol::serve(plugin, stdin.lock(), stdout)`.
+
+## Security and privacy
+
+- Plugin indexes and plugin files are fetched over HTTPS. Plain `http://` is refused, also as a redirect target; the exceptions are `127.0.0.1`, `[::1]` and `localhost`, for testing an index locally. An index fetched over the network cannot point a plugin at a local file.
+- `plugin install` records the sha256 of the binary in a manifest next to it. Before a box starts that plugin, focusdeck compares the binary with the manifest and shows an error instead of starting a binary that changed. A plugin copied in by hand has no manifest and is not checked.
+- The log, the capture queue, the reminder record and `local.json` are created readable and writable by the owner only (mode 0600).
+- `~/.local/state/focusdeck/focusdeck.log` is moved to `focusdeck.log.1` once it passes 1 MiB, so it holds at most about 2 MiB.
 
 ## Translating
 

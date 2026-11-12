@@ -17,7 +17,7 @@ Görüntülerdeki veriler uydurmadır.
 ## Kurulum
 
 ```sh
-cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.2.0 --locked focusdeck
+cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.3.0 --locked focusdeck
 ```
 
 Hazır plugin'ler [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) reposunda. Dizinden kurulur:
@@ -37,7 +37,7 @@ local  (yerleşik)
 
 `local` focusdeck'in içinde gelir ve listenin sonunda hep yer alır. `plugin install local` ile `plugin remove local` reddedilir.
 
-Plugin'ler `~/.local/share/focusdeck/plugins/<ad>` altına yazılır. `install` dizinden indirdiği dosyanın sha256'sını doğrular, tutmazsa dosyayı siler. `remove` plugin'i hâlâ kullanan bir profil varsa uyarır.
+Plugin'ler `~/.local/share/focusdeck/plugins/<ad>` altına yazılır. `install` dizinden indirdiği dosyanın sha256'sını doğrular, tutmazsa dosyayı siler. Yarıda kalan bir yeniden kurulum önceki sürümü yerinde bırakır. `remove` plugin'i hâlâ kullanan bir profil varsa uyarır.
 
 > Plugin'ler kullanıcının yetkisiyle çalışır, kum havuzu yoktur. Bir plugin'i kurmadan önce kaynağına güvendiğinden emin ol.
 
@@ -64,6 +64,7 @@ minute = ["dak"]
 
 - `language`: arayüz dili, `en` ya da `tr` gibi bir kod (bkz. [Çeviri](#çeviri)). Yoksa çekirdek sırayla `LC_ALL`, `LC_MESSAGES` ve `LANG` değişkenlerine bakar, hiçbiri yoksa İngilizceye düşer. Cron, systemd timer ya da pencere yöneticisi kısayolu `LANG` taşımayabilir; `capture` ya da `remind` bunlardan çalışıyorsa `language` yaz.
 - `capture_words`: `capture` komutunun anladığı kelimelere ek yazımlar; etkin dilin kendi kelimelerine eklenir. Her anahtar bir liste alır; anahtarlar `tomorrow`, `minute`, `hour`, `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun`, bilinmeyen anahtar hatadır.
+- `config.toml` içindeki bilinmeyen her anahtar hatadır, yazım yanlışı sessizce geçmez.
 - `default_profile`: `--profile` ve `FOCUSDECK_PROFILE` verilmediğinde kullanılan profil.
 - `registries`: plugin dizini adresleri, sırayla. Aynı ad iki dizinde varsa öndeki kazanır. Kendi dizinini ya da fork'unu buraya ekleyebilirsin.
 - `capture_command`: `capture` metinsiz çağrılınca tek satır sormak için çalıştırılan komut.
@@ -126,7 +127,7 @@ Notlar `~/.local/share/focusdeck/local.json` dosyasında durur, `FOCUSDECK_DATA_
 
 ## Ekran ve tuşlar
 
-Ana ekranda profildeki kutular ızgarada durur. Kutu başlığı öğe sayısını ve gecikmiş sayısını yazar, gecikmiş öğe kırmızıdır. En alt satır o anki ekranın tuşlarını gösterir, `?` tam listeyi açar. Çift tık ya da `Enter` kutuyu büyütür, `Esc` geri döner.
+Ana ekranda profildeki kutular ızgarada durur. Kutu başlığı öğe sayısını ve gecikmiş sayısını yazar, gecikmiş öğe `!` ile başlar ve kırmızıdır. En alt satır o anki ekranın tuşlarını gösterir, `?` tam listeyi açar. Çift tık ya da `Enter` kutuyu büyütür, `Esc` geri döner.
 
 | Tuş | Ana ekran | Büyütülmüş kutu |
 |---|---|---|
@@ -134,13 +135,19 @@ Ana ekranda profildeki kutular ızgarada durur. Kutu başlığı öğe sayısın
 | `x` | seçili öğe bitti | aynı |
 | `u` | seçili öğenin yıldızını kaldır (Zulip) | aynı |
 | `m` | taşı: hedef kutu listesi açılır | aynı |
-| `boşluk` | yok | `plan_into` olan kutuda planıma al / çıkar |
-| `o` | linki tarayıcıda aç | aynı |
+| `boşluk` | yok | `plan_into` olan kutuda planıma al; zaten planda olan öğede ilk basış sorar, ikincisi öğeyi plandan siler |
+| `o` | linki tarayıcıda aç (yalnız `https`, `http` ve `mailto`) | aynı |
 | `/` | yok | ara |
-| `Tab` | sonraki kutu | yok |
+| `Tab`, `Shift+Tab` | sonraki / önceki kutu | yok |
 | `←` `→` | soldaki / sağdaki kutu | yok |
 | `↑` `↓` | listede gezin, en üstte / en altta üstteki / alttaki kutuya geç | listede gezin |
+| `PageUp` `PageDown` `Home` `End` | yok | sayfa sayfa gezin, ilk / son öğeye git |
+| `Shift+↑` `Shift+↓` | yok | seçili öğeyi yukarı / aşağı taşı (plugin sıralamayı destekliyorsa) |
 | `?`, `q`, `Esc` | yardım, çık, geri | yardım, çık, geri |
+
+Not ya da arama alanına yapıştırılan metin tek satır olarak gelir, satır sonları boşluğa döner. Başka bir ekranda yapıştırılan metin yok sayılır, yani tuş olarak çalışmaz. Bunun için terminalin bracketed paste desteklemesi gerekir, güncel terminaller destekler.
+
+`NO_COLOR` boş olmayan bir değerle tanımlıysa focusdeck renk kullanmaz: seçim ters video ile gösterilir, gecikmiş öğeler `!` işaretini korur.
 
 Fare:
 
@@ -156,7 +163,7 @@ focusdeck capture "R12345 arandı #tel yarın 14:00 // ayrıntı"
 focusdeck capture
 ```
 
-Metin verilmezse `capture_command` tek satır sorar. Not profildeki `capture_into` kutusuna gider; başlık boşsa ya da plugin'e ulaşılamıyorsa komut 1 ile çıkar. Ulaşılamayan not `~/.local/state/focusdeck/capture-queue.jsonl` dosyasında bekler ve sonraki başarılı yakalamada gönderilir. Bir pencere yöneticisi kısayoluna (örneğin Hyprland'de `F9`) bağlamak için `focusdeck capture` yeterlidir.
+Metin verilmezse `capture_command` tek satır sorar. Not profildeki `capture_into` kutusuna gider; başlık boşsa ya da plugin'e ulaşılamıyorsa komut 1 ile çıkar. Ulaşılamayan not `~/.local/state/focusdeck/capture-queue.jsonl` dosyasında bekler ve sonraki başarılı yakalamada gönderilir. Not gönderim başlamadan önce bu dosyaya yazıldığından öldürülen ya da kesilen bir `capture` notu kaybetmez. Teslim en az bir kezdir: öldürülen bir çalıştırmadan sonra not plugin'e iki kez ulaşabilir. Bir pencere yöneticisi kısayoluna (örneğin Hyprland'de `F9`) bağlamak için `focusdeck capture` yeterlidir.
 
 Yazım kuralları:
 
@@ -203,7 +210,7 @@ Plugin, çekirdeğin her kutu için bir kez başlatıp açık tuttuğu bir progr
 | `drop` | `item`, `from` | oluşturulan ya da taşınan öğe |
 | `reminders` | `since` (RFC 3339) | `at` ve `item` çiftleri |
 
-- İstek başına zaman aşımı 15 saniyedir. Zaman aşımı, JSON olmayan satır ya da süreç çökmesi kutuda kırmızı bir satır olarak görünür; çekirdek plugin'i bir sonraki yenilemede yeniden başlatır, öteki kutular etkilenmez.
+- İstek başına zaman aşımı 15 saniyedir. Zaman aşımı, JSON olmayan satır, 16 MiB'den uzun satır ya da süreç çökmesi kutuda kırmızı bir satır olarak görünür; çekirdek plugin'i bir sonraki yenilemede yeniden başlatır, öteki kutular etkilenmez.
 - `describe` cevabındaki `protocol` çekirdeğin bildiği sürümden farklıysa kutu açılmaz.
 - Çekirdek yalnız `*_file` yolunu ve izinlerini denetler; şifreyi plugin dosyadan kendisi okur, değer çekirdekten geçmez.
 - Çekirdek her plugin'i istenen arayüz dilini `FOCUSDECK_LANG` ortam değişkeninde (örneğin `tr`) vererek başlatır, dil yoksa değişkeni kaldırır. Plugin'in o dilde çevirisi yoksa İngilizce kullanılır.
@@ -217,6 +224,13 @@ focusdeck-protocol = { git = "https://github.com/omertahaoztop/focusdeck", tag =
 ```
 
 `Plugin` trait'ini uygulayıp `focusdeck_protocol::serve(plugin, stdin.lock(), stdout)` çağırmak yeter.
+
+## Güvenlik ve gizlilik
+
+- Plugin dizinleri ve plugin dosyaları HTTPS üzerinden indirilir. Düz `http://` reddedilir, yönlendirme hedefi olarak da. İstisna, dizini yerelde denemek için `127.0.0.1`, `[::1]` ve `localhost` adresleridir. Ağdan indirilen bir dizin plugin'i yerel bir dosyaya yönlendiremez.
+- `plugin install` binary'nin sha256'sını yanındaki manifest dosyasına yazar. Bir kutu o plugin'i başlatmadan önce focusdeck binary'yi manifest ile karşılaştırır, değişmiş bir binary'yi başlatmayıp hata gösterir. Elle kopyalanan plugin'in manifest'i olmadığından denetlenmez.
+- Log, yakalama kuyruğu, hatırlatma kaydı ve `local.json` yalnız sahibinin okuyup yazabileceği şekilde (0600) oluşturulur.
+- `~/.local/state/focusdeck/focusdeck.log` 1 MiB'yi geçince `focusdeck.log.1` adına taşınır, yani en çok 2 MiB kadar yer tutar.
 
 ## Çeviri
 
