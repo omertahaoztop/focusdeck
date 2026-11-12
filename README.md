@@ -28,9 +28,24 @@ focusdeck plugin list
 focusdeck plugin remove vikunja
 ```
 
+Output of `focusdeck plugin list`:
+
+```
+vikunja  0.2.0  (in registry: 0.2.0)
+local  (built-in)
+```
+
+`local` is built into focusdeck and always ends the list. `plugin install local` and `plugin remove local` are refused.
+
 Plugins are written to `~/.local/share/focusdeck/plugins/<name>`. `install` checks the sha256 of the downloaded file against the index and deletes the file if it does not match. `remove` warns if a profile still uses the plugin.
 
 > Plugins run with your user's permissions; there is no sandbox. Make sure you trust a plugin's source before installing it.
+
+## Quick start
+
+After `cargo install`, run `focusdeck`. With no profile chosen (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`) and no file in `~/.config/focusdeck/profiles/`, it creates `profiles/notes.toml` with one box titled "Notes" (in the interface language) and opens it. Press `a`, type a line, and it is a note. `config.toml` is not written.
+
+If `profiles/` holds exactly one profile, focusdeck opens it without being asked. With several profiles and no choice it exits with an error, so pick one as described in [Profile](#profile).
 
 ## Settings
 
@@ -87,6 +102,27 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
 - Secrets never go in the profile; only a file path (`token_file`, `key_file`) does. A leading `~` is expanded in every key ending in `_file`. If the file is readable by group or others, the box does not open (`chmod 600`).
 - `plan_into`: in this box, the space key moves an item into the target box as "add to my plan". When the source plugin stops listing the item (the issue was closed), the linked target item counts as done too. No task is closed when the source `list` call fails.
 - `capture_into`, `capture_refs` and `capture_label_aliases` configure the `capture` command below.
+
+### Local box
+
+A box with `plugin = "local"` is built in: nothing to install, and `config` can be left out.
+
+```toml
+[[box]]
+id = "ideas"
+title = "Ideas"
+plugin = "local"
+row = 1
+col = 0
+config = { list = "ideas" }
+```
+
+- `list` is the name of the note list and defaults to the box `id`. Boxes that use the same `list`, in any profile, show the same notes.
+- `x` marks a note done. Notes can be moved (`m` or drag) and reordered, and the box accepts drops from other boxes: a Zulip message, a mail or a Redmine issue becomes a note.
+- A note with a due date is shown as a reminder at that time by `focusdeck remind`.
+- A local box can be the `plan_into` target of a Redmine box.
+
+Notes are kept in `~/.local/share/focusdeck/local.json`, or in `$FOCUSDECK_DATA_DIR/local.json` if that variable is set. Copying this file is enough for a backup. Done notes stay in the file but are hidden from the box.
 
 ## Screen and keys
 

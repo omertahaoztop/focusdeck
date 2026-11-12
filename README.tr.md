@@ -28,9 +28,24 @@ focusdeck plugin list
 focusdeck plugin remove vikunja
 ```
 
+`focusdeck plugin list` çıktısı:
+
+```
+vikunja  0.2.0  (dizinde: 0.2.0)
+local  (yerleşik)
+```
+
+`local` focusdeck'in içinde gelir ve listenin sonunda hep yer alır. `plugin install local` ile `plugin remove local` reddedilir.
+
 Plugin'ler `~/.local/share/focusdeck/plugins/<ad>` altına yazılır. `install` dizinden indirdiği dosyanın sha256'sını doğrular, tutmazsa dosyayı siler. `remove` plugin'i hâlâ kullanan bir profil varsa uyarır.
 
 > Plugin'ler kullanıcının yetkisiyle çalışır, kum havuzu yoktur. Bir plugin'i kurmadan önce kaynağına güvendiğinden emin ol.
+
+## Hızlı başlangıç
+
+`cargo install` sonrası `focusdeck` çalıştır. Profil seçilmemişse (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`) ve `~/.config/focusdeck/profiles/` boşsa `profiles/notes.toml` dosyasını tek kutuyla ("Notlar" başlıklı, arayüz dilinde) oluşturur ve açar. `a` tuşuna basıp bir satır yazmak not almaya yeter. `config.toml` yazılmaz.
+
+`profiles/` içinde tek profil varsa focusdeck sormadan onu açar. Birden çok profil var ve seçim yapılmamışsa hata verip çıkar. [Profil](#profil) bölümündeki gibi birini seç.
 
 ## Ayarlar
 
@@ -87,6 +102,27 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
 - Şifreler profilde durmaz, yalnız dosya yolu (`token_file`, `key_file`) yazılır. Adı `_file` ile biten her ayarın başındaki `~` açılır. Dosya grup ya da başkaları tarafından okunabiliyorsa kutu açılmaz (`chmod 600`).
 - `plan_into`: kutudaki öğeler boşluk tuşuyla hedef kutuya "planıma al" olarak taşınır. Kaynak plugin öğeyi artık listelemiyorsa (iş kapandı) bağlı hedef öğe de bitmiş sayılır. Kaynak `list` hata verdiğinde hiçbir görev kapanmaz.
 - `capture_into`, `capture_refs` ve `capture_label_aliases` aşağıdaki `capture` komutunun ayarlarıdır.
+
+### Yerel kutu
+
+`plugin = "local"` olan kutu yerleşiktir: kurulacak bir şey yok, `config` de yazılmayabilir.
+
+```toml
+[[box]]
+id = "fikirler"
+title = "Fikirler"
+plugin = "local"
+row = 1
+col = 0
+config = { list = "fikirler" }
+```
+
+- `list` not listesinin adıdır; yazılmazsa kutunun `id` değeri kullanılır. Aynı `list` adını kullanan kutular, hangi profilde olurlarsa olsunlar, aynı notları görür.
+- `x` notu bitti sayar. Notlar taşınabilir (`m` ya da sürükleme) ve sıralanabilir, kutu başka kutulardan bırakılanları da kabul eder: Zulip mesajı, mail ya da Redmine işi not olur.
+- Son tarihi olan not, saati geldiğinde `focusdeck remind` ile hatırlatma olarak gösterilir.
+- Yerel kutu bir Redmine kutusunun `plan_into` hedefi olabilir.
+
+Notlar `~/.local/share/focusdeck/local.json` dosyasında durur, `FOCUSDECK_DATA_DIR` tanımlıysa `$FOCUSDECK_DATA_DIR/local.json` dosyasında. Yedek için bu dosyayı kopyalamak yeter. Bitmiş notlar dosyada kalır ama kutuda görünmez.
 
 ## Ekran ve tuşlar
 
