@@ -317,10 +317,16 @@ async fn read_capped<R: AsyncBufRead + Unpin>(
     }
 }
 
-fn open_log(path: &Path) -> Option<tokio::fs::File> {
-    crate::private::log(path)
-        .ok()
-        .map(tokio::fs::File::from_std)
+// A failed rotation leaves the file over the limit, so the next try waits for a step of growth; a handle that cannot be inspected is dropped instead of reopened on every line.
+async fn open_log(path: &Path) -> Option<(tokio::fs::File, u64)> {
+    let file = tokio::fs::File::from_std(crate::private::log(path).ok()?);
+    let len = file.metadata().await.ok()?.len();
+    let limit = if len > crate::private::LOG_LIMIT {
+        len + LOG_RETRY_STEP
+    } else {
+        crate::private::LOG_LIMIT
+    };
+    Some((file, limit))
 }
 
 // The handle is replaced when it is past the limit, cannot be inspected, or is no longer the file at the path because someone rotated or deleted the log.
@@ -339,30 +345,19 @@ async fn needs_reopen(file: &tokio::fs::File, path: &Path, limit: u64) -> bool {
 
 async fn log_stderr<R: AsyncRead + Unpin>(label: String, stderr: R, path: PathBuf) {
     let mut reader = BufReader::new(stderr);
-    let mut file = open_log(&path);
-    let mut limit = crate::private::LOG_LIMIT;
+    let mut log = open_log(&path).await;
     while let Ok(Some(line)) = read_capped(&mut reader, MAX_STDERR_LINE, true).await {
-        if let Some(f) = &file
-            && needs_reopen(f, &path, limit).await
+        if let Some((f, limit)) = &log
+            && needs_reopen(f, &path, *limit).await
         {
-            file = open_log(&path);
-            let len = match &file {
-                Some(f) => f.metadata().await.map_or(0, |m| m.len()),
-                None => 0,
-            };
-            // A rotation that failed leaves the file over the limit, so the next try waits for it to grow by a step.
-            limit = if len > crate::private::LOG_LIMIT {
-                len + LOG_RETRY_STEP
-            } else {
-                crate::private::LOG_LIMIT
-            };
+            log = open_log(&path).await;
         }
         // keeps draining when the log is unwritable so the child never blocks on a full pipe
-        let Some(f) = file.as_mut() else { continue };
+        let Some((f, _)) = log.as_mut() else { continue };
         let text = String::from_utf8_lossy(&line.bytes);
         let entry = format!("[{label}] {}\n", text.strip_suffix('\r').unwrap_or(&text));
         if f.write_all(entry.as_bytes()).await.is_err() || f.flush().await.is_err() {
-            file = None;
+            log = None;
         }
     }
 }
