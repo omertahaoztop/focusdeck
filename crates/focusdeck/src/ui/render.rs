@@ -408,7 +408,9 @@ fn draw_picker(frame: &mut Frame, app: &App, body: Rect, from: usize) {
 
 fn draw_help(frame: &mut Frame, body: Rect) {
     let lines: Vec<Line> = HELP.iter().map(|id| Line::from(t(id))).collect();
-    let area = centered(body, body.width.min(70), HELP.len() as u16 + 2);
+    let widest = lines.iter().map(Line::width).max().unwrap_or(0);
+    let width = u16::try_from(widest + 2).unwrap_or(u16::MAX);
+    let area = centered(body, body.width.min(width), HELP.len() as u16 + 2);
     draw_overlay(frame, area, &t(msg::HELP_TITLE), lines);
 }
 
@@ -802,6 +804,19 @@ mod tests {
         ] {
             assert!(help.contains(needle), "{needle}\n{help}");
         }
+    }
+
+    #[test]
+    fn help_overlay_is_as_wide_as_its_longest_line_plus_borders() {
+        let mut app = board();
+        app.mode = Mode::Help;
+        let longest = HELP.iter().map(|id| t(id).width()).max().unwrap();
+        let term = render(&app, 120, 40);
+        let (_, y) = find(&term, "Keys");
+        let top = &rows(&term)[y as usize];
+        let left = top.chars().position(|c| c == '╔').unwrap();
+        let right = top.chars().position(|c| c == '╗').unwrap();
+        assert_eq!(right - left + 1, longest + 2);
     }
 
     #[test]
