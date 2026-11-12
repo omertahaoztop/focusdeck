@@ -1,11 +1,12 @@
 //! `focusdeck capture`: parses a note and drops it into the capture_into box, queueing it on failure.
 
-use std::path::PathBuf;
+use std::collections::VecDeque;
 use std::process::Stdio;
 
 use chrono::{DateTime, FixedOffset};
 use focusdeck_protocol::{DropParams, Item};
 use tokio::process::Command;
+use tokio::signal::unix::{Signal, SignalKind, signal};
 
 use crate::capture;
 use crate::config::Config;
@@ -16,32 +17,6 @@ use crate::paths::Paths;
 use crate::profile::Profile;
 use crate::queue::{Queue, Queued};
 use crate::ui::run::build_host;
-
-// Whatever is still in `items` when this goes away, by return, `?` or panic, lands back in the queue.
-struct Unsent<'a> {
-    queue: &'a Queue,
-    log: PathBuf,
-    items: Vec<Queued>,
-}
-
-impl Unsent<'_> {
-    fn flush(&mut self) -> std::io::Result<()> {
-        if self.items.is_empty() {
-            return Ok(());
-        }
-        self.queue.put_back(&self.items)?;
-        self.items.clear();
-        Ok(())
-    }
-}
-
-impl Drop for Unsent<'_> {
-    fn drop(&mut self) {
-        if let Err(e) = self.flush() {
-            notify::log_line(&self.log, &format!("could not write the queue: {e}"));
-        }
-    }
-}
 
 pub async fn run(
     paths: &Paths,
@@ -81,37 +56,65 @@ pub async fn run(
         None => parsed.title,
     };
 
+    let mut stop = Stop::new()?;
     let queue = Queue::new(paths.state_dir.join("capture-queue.jsonl"));
-    let mut pending = match queue.take_all() {
-        Ok(taken) => taken,
-        Err(e) => {
-            notify::log_line(&log, &format!("could not read the queue: {e}"));
-            Vec::new()
-        }
-    };
-    let queued_before = pending.len();
-    pending.push(Queued {
+    let entry = Queued {
         text,
         at: now,
         lang: Some(i18n::current().lang().to_owned()),
-    });
-    let mut unsent = Unsent {
-        queue: &queue,
-        log: log.clone(),
-        items: pending,
+    };
+    // The note reaches the disk before anything else can go wrong; a kill from here on loses nothing.
+    let pushed = queue.push_entry(&entry);
+    if let Err(e) = &pushed {
+        notify::log_line(&log, &format!("could not write the queue: {e}"));
+    }
+    let mut taken = match queue.take() {
+        Ok(taken) => taken,
+        Err(e) => {
+            notify::log_line(&log, &format!("could not read the queue: {e}"));
+            let title = if pushed.is_ok() {
+                t(msg::CAPTURE_QUEUED_TITLE)
+            } else {
+                t(msg::CAPTURE_LOST_TITLE)
+            };
+            notify::send_logged(&log, &title, &e.to_string(), true);
+            return Ok(1);
+        }
+    };
+    let mut items = std::mem::take(&mut taken.items);
+    // Without a queue write the note only exists in memory; the last item is the new one either way.
+    let own = if pushed.is_ok() {
+        items.iter().rposition(|i| *i == entry)
+    } else {
+        items.push(entry);
+        Some(items.len() - 1)
+    };
+    let mut progress = Progress {
+        items: items.into(),
+        popped: 0,
+        own,
+        queued_sent: 0,
+        own_sent: false,
     };
 
-    let outcome = deliver(paths, cfg, profile, target, &mut unsent, &log).await;
-    let flushed = unsent.flush();
-    let failed = outcome.is_err() || flushed.is_err();
-    match (outcome, flushed) {
-        (Ok(()), _) => {
-            let body = if queued_before > 0 {
+    let outcome = tokio::select! {
+        result = deliver(paths, cfg, profile, target, &mut progress, &log) => Outcome::Done(result),
+        () = stop.wait() => Outcome::Interrupted,
+    };
+    let unsent: Vec<Queued> = progress.items.iter().cloned().collect();
+    let committed = queue.commit(taken, &unsent);
+    let failed = !matches!(outcome, Outcome::Done(Ok(()))) || committed.is_err();
+    match (outcome, committed) {
+        (Outcome::Done(Ok(())), committed) => {
+            if let Err(e) = committed {
+                notify::log_line(&log, &format!("could not update the queue: {e}"));
+            }
+            let body = if progress.queued_sent > 0 {
                 format!(
                     "{shown}\n{}",
                     t_args(
                         msg::CAPTURE_QUEUE_FLUSHED,
-                        &[("count", queued_before.into())]
+                        &[("count", progress.queued_sent.into())]
                     )
                 )
             } else {
@@ -119,19 +122,67 @@ pub async fn run(
             };
             notify::send_logged(&log, &t(msg::CAPTURE_ADDED_TITLE), &body, false);
         }
-        (Err(e), Ok(())) => {
+        (Outcome::Done(Err(e)), Ok(())) => {
             notify::log_line(&log, &format!("{target}: {e}"));
             notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &e, true);
         }
-        (Err(e), Err(io)) => {
+        (Outcome::Interrupted, Ok(())) => {
             notify::log_line(
                 &log,
-                &format!("{target}: {e}; could not write the queue: {io}"),
+                "interrupted while sending, the unsent notes are queued",
             );
+            notify::send_logged(
+                &log,
+                &t(msg::CAPTURE_QUEUED_TITLE),
+                &t(msg::CAPTURE_INTERRUPTED),
+                true,
+            );
+        }
+        (outcome, Err(io)) => {
+            let why = match outcome {
+                Outcome::Done(Err(e)) => format!("{target}: {e}"),
+                Outcome::Done(Ok(())) => "sent".to_owned(),
+                Outcome::Interrupted => "interrupted".to_owned(),
+            };
+            notify::log_line(&log, &format!("{why}; could not write the queue: {io}"));
             notify::send_logged(&log, &t(msg::CAPTURE_LOST_TITLE), &io.to_string(), true);
         }
     }
     Ok(i32::from(failed))
+}
+
+enum Outcome {
+    Done(Result<(), String>),
+    Interrupted,
+}
+
+struct Progress {
+    items: VecDeque<Queued>,
+    popped: usize,
+    own: Option<usize>,
+    queued_sent: usize,
+    own_sent: bool,
+}
+
+struct Stop {
+    term: Signal,
+    int: Signal,
+}
+
+impl Stop {
+    fn new() -> std::io::Result<Stop> {
+        Ok(Stop {
+            term: signal(SignalKind::terminate())?,
+            int: signal(SignalKind::interrupt())?,
+        })
+    }
+
+    async fn wait(&mut self) {
+        tokio::select! {
+            _ = self.term.recv() => {}
+            _ = self.int.recv() => {}
+        }
+    }
 }
 
 fn parse(
@@ -196,7 +247,7 @@ async fn deliver(
     cfg: &Config,
     profile: &Profile,
     target: &str,
-    unsent: &mut Unsent<'_>,
+    progress: &mut Progress,
     log: &std::path::Path,
 ) -> Result<(), String> {
     let spec = profile
@@ -205,9 +256,10 @@ async fn deliver(
         .ok_or_else(|| t_args(msg::CAPTURE_NO_BOX, &[("target", target.into())]))?;
     let home = dirs::home_dir().unwrap_or_default();
     let mut host: PluginHost = build_host(paths, &home, spec)?;
-    while let Some(entry) = unsent.items.first() {
+    while let Some(entry) = progress.items.front() {
         let lang = entry.lang.as_deref().or(i18n::requested());
         let words = capture::Words::new(&i18n::localizer(lang), &cfg.capture_words);
+        let is_own = progress.own == Some(progress.popped);
         match parse(profile, &entry.text, entry.at, &words) {
             Ok(parsed) => {
                 let drop = DropParams {
@@ -217,10 +269,16 @@ async fn deliver(
                 host.call::<_, Item>("drop", &drop)
                     .await
                     .map_err(|e| e.to_string())?;
+                if is_own {
+                    progress.own_sent = true;
+                } else {
+                    progress.queued_sent += 1;
+                }
             }
             Err(e) => notify::log_line(log, &format!("skipped a queued note: {e}")),
         }
-        unsent.items.remove(0);
+        progress.items.pop_front();
+        progress.popped += 1;
     }
     Ok(())
 }

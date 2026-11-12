@@ -172,6 +172,7 @@ capture-empty-title = title is empty
 capture-command-empty = capture_command is empty
 capture-prompt-spawn-failed = could not start { $program }: { $error }
 capture-no-box = no box named { $target }
+capture-interrupted = interrupted before the note was sent
 
 remind-write-failed = could not write { $path }
 

@@ -28,14 +28,7 @@ pub fn send_logged(log: &Path, title: &str, body: &str, critical: bool) -> bool 
 }
 
 pub fn log_line(log: &Path, message: &str) {
-    if let Some(dir) = log.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)
-    {
+    if let Ok(mut file) = crate::private::log(log) {
         let _ = writeln!(file, "[focusdeck] {message}");
     }
 }

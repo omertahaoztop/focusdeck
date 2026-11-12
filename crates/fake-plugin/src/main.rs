@@ -91,6 +91,9 @@ impl Plugin for Fake {
     }
 
     fn reminders(&mut self, _p: RemindersParams) -> Result<Vec<Reminder>, String> {
+        if mode() == "fail-reminders" {
+            return Err("reminders are unavailable".into());
+        }
         let Ok(path) = std::env::var("FAKE_REMINDERS_FILE") else {
             return Ok(vec![]);
         };
@@ -101,8 +104,17 @@ impl Plugin for Fake {
     }
 
     fn drop_item(&mut self, p: DropParams) -> Result<Item, String> {
-        if mode() == "crash" {
+        let mode = mode();
+        if mode == "crash" || mode.strip_prefix("crash-on:") == Some(p.item.title.as_str()) {
             std::process::exit(3);
+        }
+        if mode == "slow-drop" {
+            if let Ok(path) = std::env::var("FAKE_LOG")
+                && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path)
+            {
+                let _ = writeln!(file, "waiting {}", p.item.title);
+            }
+            std::thread::sleep(Duration::from_secs(20));
         }
         if let Ok(path) = std::env::var("FAKE_LOG")
             && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path)
