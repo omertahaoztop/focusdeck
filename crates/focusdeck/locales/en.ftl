@@ -178,3 +178,7 @@ host-protocol-mismatch = protocol mismatch: core { $expected }, plugin { $got }
 host-invalid-result = invalid result: { $error }
 host-invalid-describe = invalid describe: { $error }
 host-non-utf8 = output is not UTF-8
+
+local-file-corrupt = { $path } could not be read ({ $error }); focusdeck will not write to it
+local-file-newer = { $path } was written by a newer focusdeck (format { $version }); update focusdeck
+local-file-io = { $path }: { $error }

@@ -174,3 +174,7 @@ host-protocol-mismatch = protokol uyuşmuyor: çekirdek { $expected }, plugin { 
 host-invalid-result = geçersiz sonuç: { $error }
 host-invalid-describe = geçersiz describe: { $error }
 host-non-utf8 = UTF-8 olmayan çıktı
+
+local-file-corrupt = { $path } okunamadı ({ $error }); focusdeck bu dosyaya yazmayacak
+local-file-newer = { $path } daha yeni bir focusdeck ile yazılmış (biçim { $version }); focusdeck'i güncelle
+local-file-io = { $path }: { $error }

@@ -4,6 +4,7 @@ members = ["crates/fake-plugin", "crates/focusdeck", "crates/focusdeck-i18n", "c
 
 [workspace.package]
 edition = "2024"
+rust-version = "1.89"
 license = "MIT"
 
 [workspace.dependencies]
