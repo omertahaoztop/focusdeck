@@ -4,12 +4,6 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::paths::Paths;
-
-pub fn send(title: &str, body: &str, critical: bool) -> bool {
-    send_logged(&Paths::from_env().log_file(), title, body, critical)
-}
-
 pub fn send_logged(log: &Path, title: &str, body: &str, critical: bool) -> bool {
     let mut cmd = Command::new("notify-send");
     if critical {

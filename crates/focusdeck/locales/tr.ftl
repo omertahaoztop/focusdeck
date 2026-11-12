@@ -108,6 +108,7 @@ error-plugin-not-installed = { $plugin } kurulu değil, focusdeck plugin install
 error-secret-missing = { $path } bulunamadı
 error-secret-exposed = { $path } dosyasını başkaları okuyabiliyor, chmod 600 yap
 error-secret-unreadable = { $path } denetlenemedi: { $error }
+error-no-base-dir = { $var } ayarlı değil ve ev dizini bulunamadı
 
 config-read-failed = { $path } okunamadı
 config-invalid = { $path } geçersiz

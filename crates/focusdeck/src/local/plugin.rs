@@ -252,7 +252,8 @@ impl Plugin for Local {
 }
 
 pub fn serve_stdio() -> io::Result<()> {
-    let plugin = Local::new(Store::from_paths(&Paths::from_env()));
+    let paths = Paths::from_env().map_err(io::Error::other)?;
+    let plugin = Local::new(Store::from_paths(&paths));
     focusdeck_protocol::serve(plugin, io::stdin().lock(), io::stdout().lock())
 }
 
