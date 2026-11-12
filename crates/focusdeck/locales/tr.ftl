@@ -178,3 +178,7 @@ host-non-utf8 = UTF-8 olmayan çıktı
 local-file-corrupt = { $path } okunamadı ({ $error }); focusdeck bu dosyaya yazmayacak
 local-file-newer = { $path } daha yeni bir focusdeck ile yazılmış (biçim { $version }); focusdeck'i güncelle
 local-file-io = { $path }: { $error }
+local-invalid-settings = yerel kutu ayarı geçersiz: { $error }
+local-item-missing = { $id } notu bu kutuda yok
+local-position-required = sıra numarası gerekli
+local-unknown-action = bilinmeyen eylem: { $action }

@@ -182,3 +182,7 @@ host-non-utf8 = output is not UTF-8
 local-file-corrupt = { $path } could not be read ({ $error }); focusdeck will not write to it
 local-file-newer = { $path } was written by a newer focusdeck (format { $version }); update focusdeck
 local-file-io = { $path }: { $error }
+local-invalid-settings = invalid local box settings: { $error }
+local-item-missing = note { $id } is not in this box
+local-position-required = a position is required
+local-unknown-action = unknown action: { $action }
