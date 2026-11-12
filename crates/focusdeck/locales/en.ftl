@@ -99,6 +99,7 @@ cli-in-use-warning = warning: profile { $profile } uses this plugin
 cli-latest = (in registry: { $version })
 cli-not-in-registry = (in registry: none)
 cli-registry-unreachable = registry unreachable
+cli-builtin = (built-in)
 
 error-prefix = error:
 error-duration-invalid = invalid duration: { $value } (example: 90s, 2m, 1h)
@@ -122,6 +123,7 @@ profile-empty-box = width and height of box { $id } must be at least 1
 profile-overlapping-cells = boxes { $first } and { $second } share a cell: row { $row } column { $col }
 profile-no-profile = no profile selected: pass --profile or set default_profile in config.toml
 profile-invalid-name = invalid profile name: { $name }
+profile-create-failed = could not create { $path }: { $error }
 
 install-invalid-name = invalid plugin name: { $name }
 install-checksum-mismatch = checksum mismatch
@@ -150,6 +152,8 @@ install-chmod-failed = could not make the plugin executable
 install-manifest-failed = could not write the manifest
 install-delete-failed = could not delete { $path }
 install-not-installed = plugin is not installed: { $name }
+install-local-builtin = local comes with focusdeck, there is nothing to install
+install-local-not-removable = local comes with focusdeck and cannot be removed
 
 # Notification titles and bodies of "focusdeck capture" and the rofi prompt label.
 capture-prompt = Note
@@ -178,3 +182,15 @@ host-protocol-mismatch = protocol mismatch: core { $expected }, plugin { $got }
 host-invalid-result = invalid result: { $error }
 host-invalid-describe = invalid describe: { $error }
 host-non-utf8 = output is not UTF-8
+
+local-file-corrupt = { $path } could not be read ({ $error }); focusdeck will not write to it
+local-file-newer = { $path } was written by a newer focusdeck (format { $version }); update focusdeck
+local-file-io = { $path }: { $error }
+local-invalid-settings = invalid local box settings: { $error }
+local-item-missing = note { $id } is not in this box
+local-list-required = `list` must be a non-empty string
+local-position-required = a position is required
+local-unknown-action = unknown action: { $action }
+
+starter-title = Notes
+starter-tmp-left = could not remove temporary file { $path }: { $error }

@@ -99,6 +99,7 @@ cli-in-use-warning = uyarı: { $profile } profili bu plugin'i kullanıyor
 cli-latest = (dizinde: { $version })
 cli-not-in-registry = (dizinde: yok)
 cli-registry-unreachable = dizine ulaşılamadı
+cli-builtin = (yerleşik)
 
 error-prefix = hata:
 error-duration-invalid = geçersiz süre: { $value } (örnek: 90s, 2m, 1h)
@@ -122,6 +123,7 @@ profile-empty-box = { $id } kutusunun width ve height değeri en az 1 olmalı
 profile-overlapping-cells = { $first } ve { $second } kutuları aynı hücrede: satır { $row } sütun { $col }
 profile-no-profile = profil seçilmedi: --profile ver ya da config.toml'a default_profile yaz
 profile-invalid-name = geçersiz profil adı: { $name }
+profile-create-failed = { $path } oluşturulamadı: { $error }
 
 install-invalid-name = geçersiz plugin adı: { $name }
 install-checksum-mismatch = sağlama tutmadı
@@ -150,6 +152,8 @@ install-chmod-failed = plugin çalıştırılabilir yapılamadı
 install-manifest-failed = manifest yazılamadı
 install-delete-failed = { $path } silinemedi
 install-not-installed = plugin kurulu değil: { $name }
+install-local-builtin = local focusdeck ile birlikte gelir, kurulacak bir şey yok
+install-local-not-removable = local focusdeck ile birlikte gelir, kaldırılamaz
 
 # Notification titles and bodies of "focusdeck capture" and the rofi prompt label.
 capture-prompt = Not
@@ -174,3 +178,15 @@ host-protocol-mismatch = protokol uyuşmuyor: çekirdek { $expected }, plugin { 
 host-invalid-result = geçersiz sonuç: { $error }
 host-invalid-describe = geçersiz describe: { $error }
 host-non-utf8 = UTF-8 olmayan çıktı
+
+local-file-corrupt = { $path } okunamadı ({ $error }); focusdeck bu dosyaya yazmayacak
+local-file-newer = { $path } daha yeni bir focusdeck ile yazılmış (biçim { $version }); focusdeck'i güncelle
+local-file-io = { $path }: { $error }
+local-invalid-settings = yerel kutu ayarı geçersiz: { $error }
+local-item-missing = { $id } notu bu kutuda yok
+local-list-required = `list` boş olmayan bir metin olmalı
+local-position-required = sıra numarası gerekli
+local-unknown-action = bilinmeyen eylem: { $action }
+
+starter-title = Notlar
+starter-tmp-left = geçici dosya silinemedi { $path }: { $error }

@@ -7,6 +7,7 @@ pub mod host;
 pub mod i18n;
 pub mod install;
 pub mod links;
+pub mod local;
 pub mod notify;
 pub mod paths;
 pub mod profile;
