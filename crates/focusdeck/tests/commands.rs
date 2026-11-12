@@ -322,6 +322,7 @@ fn crashing_plugin_queues_the_note() {
     let queued = env.queue().take_all().unwrap();
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].text, "log at");
+    assert_eq!(queued[0].lang.as_deref(), Some("en"));
     let notes = env.notifications();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0][..4], ["-u", "critical", "--", "focusdeck: queued"]);
@@ -358,11 +359,28 @@ fn successful_capture_flushes_the_queue_first() {
 fn queued_note_keeps_its_original_time() {
     let env = Env::standard();
     env.queue()
-        .push("eski 30dk", at("2026-11-11T10:00:00+03:00"))
+        .push("eski 30min", at("2026-11-11T10:00:00+03:00"))
         .unwrap();
     assert_eq!(env.run(&["capture", "yeni"]).code(), 0);
     let drops = env.drops();
     assert_eq!(drops[0].due, Some(at("2026-11-11T10:30:00+03:00")));
+}
+
+#[test]
+fn queued_note_parses_in_its_own_language() {
+    let env = Env::standard();
+    env.queue()
+        .put_back(&[Queued {
+            text: "ara yarın 10:00".into(),
+            at: at("2026-11-11T10:00:00+03:00"),
+            lang: Some("tr".into()),
+        }])
+        .unwrap();
+    let ran = env.run(&["capture", "yeni"]);
+    assert_eq!(ran.code(), 0, "{}", ran.stderr());
+    let drops = env.drops();
+    assert_eq!(drops[0].title, "ara");
+    assert_eq!(drops[0].due, Some(at("2026-11-12T10:00:00+03:00")));
 }
 
 #[test]

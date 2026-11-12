@@ -68,7 +68,8 @@ pub async fn run(
     };
     let text = text.trim().to_owned();
 
-    let parsed = match parse(profile, &text, now) {
+    let words = capture::Words::new(i18n::current(), &cfg.capture_words);
+    let parsed = match parse(profile, &text, now, &words) {
         Ok(parsed) => parsed,
         Err(e) => {
             notify::send_logged(&log, &t(msg::CAPTURE_FAILED_TITLE), &e, true);
@@ -89,14 +90,18 @@ pub async fn run(
         }
     };
     let queued_before = pending.len();
-    pending.push(Queued { text, at: now });
+    pending.push(Queued {
+        text,
+        at: now,
+        lang: Some(i18n::current().lang().to_owned()),
+    });
     let mut unsent = Unsent {
         queue: &queue,
         log: log.clone(),
         items: pending,
     };
 
-    let outcome = deliver(paths, profile, target, &mut unsent, &log).await;
+    let outcome = deliver(paths, cfg, profile, target, &mut unsent, &log).await;
     let flushed = unsent.flush();
     let failed = outcome.is_err() || flushed.is_err();
     match (outcome, flushed) {
@@ -133,10 +138,12 @@ fn parse(
     profile: &Profile,
     text: &str,
     at: DateTime<FixedOffset>,
+    words: &capture::Words,
 ) -> Result<capture::Capture, String> {
     capture::parse(
         text,
         at,
+        words,
         &profile.capture_refs,
         &profile.capture_label_aliases,
     )
@@ -186,6 +193,7 @@ async fn prompt(command: &[String]) -> Result<String, String> {
 
 async fn deliver(
     paths: &Paths,
+    cfg: &Config,
     profile: &Profile,
     target: &str,
     unsent: &mut Unsent<'_>,
@@ -198,7 +206,9 @@ async fn deliver(
     let home = dirs::home_dir().unwrap_or_default();
     let mut host: PluginHost = build_host(paths, &home, spec)?;
     while let Some(entry) = unsent.items.first() {
-        match parse(profile, &entry.text, entry.at) {
+        let lang = entry.lang.as_deref().or(i18n::requested());
+        let words = capture::Words::new(&i18n::localizer(lang), &cfg.capture_words);
+        match parse(profile, &entry.text, entry.at, &words) {
             Ok(parsed) => {
                 let drop = DropParams {
                     item: parsed.into_item(),

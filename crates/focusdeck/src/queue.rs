@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 pub struct Queued {
     pub text: String,
     pub at: DateTime<FixedOffset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
 }
 
 pub struct Queue {
@@ -27,6 +29,7 @@ impl Queue {
         self.append(&[Queued {
             text: text.to_owned(),
             at,
+            lang: None,
         }])
     }
 
@@ -192,11 +195,13 @@ mod tests {
             vec![
                 Queued {
                     text: "bir".into(),
-                    at: at("2026-11-12T10:00:00+03:00")
+                    at: at("2026-11-12T10:00:00+03:00"),
+                    lang: None,
                 },
                 Queued {
                     text: "iki".into(),
-                    at: at("2026-11-12T10:01:00+03:00")
+                    at: at("2026-11-12T10:01:00+03:00"),
+                    lang: None,
                 },
             ]
         );
@@ -216,11 +221,39 @@ mod tests {
     }
 
     #[test]
+    fn old_entries_without_lang_still_load() {
+        let (dir, q) = queue();
+        fs::write(
+            dir.path().join("capture-queue.jsonl"),
+            "{\"text\":\"a\",\"at\":\"2026-11-12T10:00:00+03:00\"}\n",
+        )
+        .unwrap();
+        let got = q.take_all().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].lang, None);
+
+        let tr = Queued {
+            text: "b".into(),
+            at: at("2026-11-12T10:00:00+03:00"),
+            lang: Some("tr".into()),
+        };
+        q.put_back(std::slice::from_ref(&tr)).unwrap();
+        let raw = fs::read_to_string(dir.path().join("capture-queue.jsonl")).unwrap();
+        assert!(raw.contains("\"lang\":\"tr\""), "{raw}");
+        assert_eq!(q.take_all().unwrap(), vec![tr]);
+
+        q.push("c", at("2026-11-12T10:00:00+03:00")).unwrap();
+        let raw = fs::read_to_string(dir.path().join("capture-queue.jsonl")).unwrap();
+        assert!(!raw.contains("lang"), "{raw}");
+    }
+
+    #[test]
     fn put_back_writes_one_record() {
         let (dir, q) = queue();
         let item = Queued {
             text: "geri".into(),
             at: at("2026-11-12T10:00:00+03:00"),
+            lang: None,
         };
         q.put_back(std::slice::from_ref(&item)).unwrap();
         let raw = fs::read_to_string(dir.path().join("capture-queue.jsonl")).unwrap();

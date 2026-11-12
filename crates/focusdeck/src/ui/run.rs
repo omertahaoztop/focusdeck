@@ -26,7 +26,7 @@ use super::{layout, render};
 use crate::capture;
 use crate::config::Config;
 use crate::host::PluginHost;
-use crate::i18n::{msg, t, t_args};
+use crate::i18n::{self, msg, t, t_args};
 use crate::install;
 use crate::paths::Paths;
 use crate::profile::Profile;
@@ -79,6 +79,7 @@ pub fn view_for(app: &App, idx: usize) -> View {
 
 struct Runtime<'a> {
     profile: &'a Profile,
+    words: capture::Words,
     cmds: Vec<Option<mpsc::Sender<BoxCmd>>>,
 }
 
@@ -141,6 +142,7 @@ impl Runtime<'_> {
         match capture::parse(
             text,
             now,
+            &self.words,
             &self.profile.capture_refs,
             &self.profile.capture_label_aliases,
         ) {
@@ -222,7 +224,7 @@ pub fn build_host(
     )
 }
 
-pub async fn tui(paths: &Paths, _cfg: &Config, profile: Profile) -> anyhow::Result<()> {
+pub async fn tui(paths: &Paths, cfg: &Config, profile: Profile) -> anyhow::Result<()> {
     let (mut terminal, _guard) = enter_terminal()?;
     let mut app = App::new(&profile);
     let home = dirs::home_dir().unwrap_or_default();
@@ -246,6 +248,7 @@ pub async fn tui(paths: &Paths, _cfg: &Config, profile: Profile) -> anyhow::Resu
     }
     let rt = Runtime {
         profile: &profile,
+        words: capture::Words::new(i18n::current(), &cfg.capture_words),
         cmds,
     };
     let result = event_loop(&mut terminal, &mut app, &rt, &mut event_rx, &mut tick_rx).await;
@@ -355,6 +358,7 @@ mod tests {
         let app = App::new(&profile);
         let rt = Runtime {
             profile: &profile,
+            words: capture::Words::new(&i18n::localizer(None), &Default::default()),
             cmds: Vec::new(),
         };
         let done = |what: &str, result| BoxEvent::Finished {
