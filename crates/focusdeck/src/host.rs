@@ -18,8 +18,6 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 const BAD_LINE_LIMIT: usize = 200;
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_STDERR_LINE: usize = 64 * 1024;
-// a long-lived writer reopens the log this often so rotation sees its growth
-const LOG_REOPEN_AFTER: usize = 64 * 1024;
 
 #[derive(Debug)]
 pub enum HostError {
@@ -326,20 +324,21 @@ fn open_log(path: &std::path::Path) -> Option<tokio::fs::File> {
 async fn log_stderr<R: AsyncRead + Unpin>(label: String, stderr: R, path: PathBuf) {
     let mut reader = BufReader::new(stderr);
     let mut file = open_log(&path);
-    let mut written = 0;
     while let Ok(Some(line)) = read_capped(&mut reader, MAX_STDERR_LINE, true).await {
+        // a file past the limit is due for rotation, or another process has already moved it aside
+        let full = match &file {
+            Some(f) => (f.metadata().await).is_ok_and(|m| m.len() > crate::private::LOG_LIMIT),
+            None => false,
+        };
+        if full {
+            file = open_log(&path);
+        }
         // keeps draining when the log is unwritable so the child never blocks on a full pipe
         let Some(f) = file.as_mut() else { continue };
         let text = String::from_utf8_lossy(&line.bytes);
         let entry = format!("[{label}] {}\n", text.strip_suffix('\r').unwrap_or(&text));
         if f.write_all(entry.as_bytes()).await.is_err() || f.flush().await.is_err() {
             file = None;
-            continue;
-        }
-        written += entry.len();
-        if written >= LOG_REOPEN_AFTER {
-            file = open_log(&path);
-            written = 0;
         }
     }
 }
@@ -404,12 +403,41 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("focusdeck.log");
         let line = format!("{}\n", "x".repeat(99));
-        let total = usize::try_from(crate::private::LOG_LIMIT).unwrap() + 2 * LOG_REOPEN_AFTER;
-        let input = line.repeat(total / line.len() + 1);
+        let limit = usize::try_from(crate::private::LOG_LIMIT).unwrap();
+        let input = line.repeat((limit + limit / 8) / line.len());
         log_stderr("p".into(), std::io::Cursor::new(input), path.clone()).await;
         let entry = "[p] ".len() + line.len();
-        let cap = usize::try_from(crate::private::LOG_LIMIT).unwrap() + LOG_REOPEN_AFTER + entry;
         assert!(dir.path().join("focusdeck.log.1").exists());
-        assert!(std::fs::metadata(&path).unwrap().len() <= cap as u64);
+        assert!(std::fs::metadata(&path).unwrap().len() <= (limit + entry) as u64);
+    }
+
+    #[tokio::test]
+    async fn a_quiet_writer_follows_a_log_another_process_rotated() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("focusdeck.log");
+        let (mut tx, rx) = tokio::io::duplex(1024);
+        let task = tokio::spawn(log_stderr("p".into(), rx, path.clone()));
+        tx.write_all(b"first\n").await.unwrap();
+        let first_logged = async {
+            while !std::fs::read_to_string(&path).is_ok_and(|s| s.contains("first")) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), first_logged)
+            .await
+            .unwrap();
+        let filler = vec![b'x'; usize::try_from(crate::private::LOG_LIMIT).unwrap() + 1];
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&filler)
+            .unwrap();
+        std::fs::rename(&path, dir.path().join("focusdeck.log.1")).unwrap();
+        tx.write_all(b"second\n").await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[p] second\n");
     }
 }
