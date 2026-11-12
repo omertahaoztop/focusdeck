@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::app::{App, BoxState, Drag, Mode};
+use super::app::{App, BoxState, Drag, DropPlan, Mode};
 use super::{hint, layout};
 use crate::cli::display_safe;
 use focusdeck_protocol::Item;
@@ -65,8 +65,7 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: DateTime<Local>) {
     let drag = app.drag();
     for (idx, rect) in layout::frame_rects(area, app).into_iter().enumerate() {
         if !rect.is_empty() {
-            let target = drag.as_ref().is_some_and(|d| accepts_drop(app, d, idx));
-            draw_box(frame, app, idx, rect, idx == focus, target, now);
+            draw_box(frame, app, idx, rect, idx == focus, drag.as_ref(), now);
         }
     }
     if let Some(drag) = &drag {
@@ -180,16 +179,32 @@ fn draw_box(
     idx: usize,
     rect: Rect,
     focused: bool,
-    drop_target: bool,
+    drag: Option<&Drag>,
     now: DateTime<Local>,
 ) {
     let state = &app.boxes[idx];
-    let border = if drop_target {
+    let plan = drag.map(|d| d.plan);
+    let hovered =
+        matches!(plan, Some(DropPlan::Into(i) | DropPlan::Reorder { idx: i, .. }) if i == idx);
+    let mark = match plan {
+        Some(DropPlan::Reorder { idx: i, row }) if i == idx => Some(row),
+        _ => None,
+    };
+    let border = if hovered {
         Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else if plan == Some(DropPlan::Rejected(idx)) {
+        Style::new().fg(Color::Red)
+    } else if drag.is_some_and(|d| accepts_drop(app, d, idx)) {
+        Style::new().fg(Color::Yellow)
     } else if focused {
         Style::new().fg(Color::Cyan)
     } else {
         Style::new().fg(Color::DarkGray)
+    };
+    let border_type = if hovered {
+        BorderType::Thick
+    } else {
+        BorderType::Plain
     };
     let title = truncate(
         &box_title(app, idx, now),
@@ -201,6 +216,7 @@ fn draw_box(
         Style::new()
     };
     let block = Block::bordered()
+        .border_type(border_type)
         .border_style(border)
         .title(Span::styled(title, title_style));
     let inner = block.inner(rect);
@@ -224,16 +240,14 @@ fn draw_box(
         .take(usize::from(list.height))
         .map(|(row, item)| {
             let selected = focused && row == state.selected;
-            item_line(
-                app,
-                idx,
-                state,
-                item,
-                usize::from(list.width),
-                zoomed,
-                selected,
-                now,
-            )
+            let marked = mark == Some(row);
+            let width = usize::from(list.width).saturating_sub(if marked { 2 } else { 0 });
+            let mut line = item_line(app, idx, state, item, width, zoomed, selected, now);
+            if marked {
+                let arrow = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                line.spans.insert(0, Span::styled("▶ ", arrow));
+            }
+            line
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), list);
@@ -581,19 +595,38 @@ mod tests {
     }
 
     #[test]
-    fn drop_targets_get_the_highlight_border() {
+    fn hovered_target_gets_a_thick_border_others_a_thin_one() {
         let mut app = board();
         press_zulip_first_item(&mut app);
         pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 10, 10);
         let term = render(&app, 120, 40);
+        let corner = &term.backend().buffer()[(0, 1)];
+        assert_eq!((corner.symbol(), corner.fg), ("┏", Color::Yellow));
+
+        pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 50, 10);
+        let term = render(&app, 120, 40);
         let buf = term.backend().buffer();
-        let highlighted = |x: u16| {
-            let cell = &buf[(x, 1)];
-            cell.fg == Color::Yellow && cell.modifier.contains(Modifier::BOLD)
-        };
-        assert!(highlighted(0), "sozlu kabul eder");
-        assert!(!highlighted(40), "redmine kabul etmez");
-        assert!(!highlighted(80), "zulip kaynak ve sıralama yok");
+        assert_eq!((buf[(0, 1)].symbol(), buf[(0, 1)].fg), ("┌", Color::Yellow));
+        assert_eq!(buf[(40, 1)].fg, Color::Red, "redmine kabul etmez");
+        assert_ne!(
+            buf[(80, 1)].fg,
+            Color::Yellow,
+            "zulip kaynak ve sıralama yok"
+        );
+    }
+
+    #[test]
+    fn reorder_marks_the_row_it_lands_on() {
+        let mut app = board();
+        pointer(&mut app, MouseEventKind::Down(MouseButton::Left), 1, 2);
+        pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 20, 4);
+        let term = render(&app, 120, 40);
+        assert!(
+            rows(&term)[4].starts_with("┃▶ üçüncü görev"),
+            "{}",
+            rows(&term)[4]
+        );
+        assert!(!rows(&term)[2].contains('▶'));
     }
 
     #[test]

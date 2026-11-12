@@ -57,12 +57,22 @@ pub enum Effect {
     Quit,
 }
 
+/// What releasing the mouse right now would do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropPlan {
+    Reorder { idx: usize, row: usize },
+    Into(usize),
+    Rejected(usize),
+    Nothing,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Drag {
     pub from: usize,
     pub item: Item,
     pub x: u16,
     pub y: u16,
+    pub plan: DropPlan,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,7 +92,7 @@ pub struct App {
     return_to: Mode,
     filter: String,
     pressed: Option<Pressed>,
-    pointer: Option<(u16, u16)>,
+    pointer: Option<(u16, u16, Option<Hit>)>,
     last_click: Option<(Pressed, Instant)>,
 }
 
@@ -149,7 +159,7 @@ impl App {
 
     /// Present only once the pointer has left the pressed cell, so a plain click never shows it.
     pub fn drag(&self) -> Option<Drag> {
-        let (x, y) = self.pointer?;
+        let (x, y, over) = self.pointer?;
         let pressed = self.pressed?;
         let item = (*self.visible(pressed.box_idx).get(pressed.row)?).clone();
         Some(Drag {
@@ -157,7 +167,36 @@ impl App {
             item,
             x,
             y,
+            plan: self.drop_plan(pressed, over),
         })
+    }
+
+    fn drop_plan(&self, from: Pressed, over: Option<Hit>) -> DropPlan {
+        let Some(hit) = over else {
+            return DropPlan::Nothing;
+        };
+        if hit.box_idx == from.box_idx {
+            if !has_action(&self.boxes[hit.box_idx], "reorder") {
+                return DropPlan::Nothing;
+            }
+            let last = self.visible(hit.box_idx).len().saturating_sub(1);
+            return match hit.row.map(|r| r.min(last)) {
+                Some(row) if row != from.row => DropPlan::Reorder {
+                    idx: hit.box_idx,
+                    row,
+                },
+                _ => DropPlan::Nothing,
+            };
+        }
+        let accepts = self.boxes[hit.box_idx]
+            .describe
+            .as_ref()
+            .is_some_and(|d| d.accepts_drop);
+        if accepts {
+            DropPlan::Into(hit.box_idx)
+        } else {
+            DropPlan::Rejected(hit.box_idx)
+        }
     }
 
     fn plan_target(&self, idx: usize) -> Option<usize> {
@@ -611,7 +650,7 @@ impl App {
         let on_pressed_cell =
             target.is_some_and(|h| h.box_idx == pressed.box_idx && h.row == Some(pressed.row));
         if self.pointer.is_some() || !on_pressed_cell {
-            self.pointer = Some((x, y));
+            self.pointer = Some((x, y, target));
         }
     }
 
@@ -661,9 +700,6 @@ impl App {
         let Some(from) = self.pressed.take() else {
             return Vec::new();
         };
-        let Some(hit) = target else {
-            return Vec::new();
-        };
         let Some(item) = self
             .visible(from.box_idx)
             .get(from.row)
@@ -671,35 +707,29 @@ impl App {
         else {
             return Vec::new();
         };
-        if hit.box_idx == from.box_idx {
-            let Some(row) = hit.row.filter(|&r| r != from.row) else {
-                return Vec::new();
-            };
+        if target.is_some_and(|h| h.box_idx != from.box_idx || h.row != Some(from.row)) {
             self.last_click = None;
-            if !has_action(&self.boxes[from.box_idx], "reorder") {
-                return Vec::new();
-            }
-            return vec![plain_action(
-                from.box_idx,
+        }
+        match self.drop_plan(from, target) {
+            DropPlan::Reorder { idx, row } => vec![plain_action(
+                idx,
                 &item.id,
                 "reorder",
                 json!({ "position": row }),
-            )];
-        }
-        self.last_click = None;
-        let target = &self.boxes[hit.box_idx];
-        if target.describe.as_ref().is_some_and(|d| d.accepts_drop) {
-            vec![Effect::Drop {
-                idx: hit.box_idx,
+            )],
+            DropPlan::Into(idx) => vec![Effect::Drop {
+                idx,
                 from: Some(source_of(&self.boxes[from.box_idx].spec, &item)),
                 item,
-            }]
-        } else {
-            self.flash = Some(format!(
-                "{} kutusu bırakılan öğe kabul etmiyor",
-                target.spec.title
-            ));
-            Vec::new()
+            }],
+            DropPlan::Rejected(idx) => {
+                self.flash = Some(format!(
+                    "{} kutusu bırakılan öğe kabul etmiyor",
+                    self.boxes[idx].spec.title
+                ));
+                Vec::new()
+            }
+            DropPlan::Nothing => Vec::new(),
         }
     }
 }
@@ -1306,7 +1336,8 @@ mod tests {
                 from: ZULIP,
                 item: item("z1", "zulip mesajı"),
                 x: 3,
-                y: 3
+                y: 3,
+                plan: DropPlan::Into(SOZLU),
             })
         );
         drag_to(&mut app, 22, 1, t);
@@ -1439,6 +1470,37 @@ mod tests {
         down(&mut app, 21, 1, t);
         assert!(up(&mut app, 90, 1, t).is_empty());
         assert_eq!(app.flash, None);
+    }
+
+    #[test]
+    fn drag_plan_follows_the_box_under_the_pointer() {
+        let mut app = loaded_app();
+        let t = Instant::now();
+        down(&mut app, 21, 1, t);
+        drag_to(&mut app, 1, 2, t);
+        assert_eq!(app.drag().unwrap().plan, DropPlan::Into(SOZLU));
+        drag_to(&mut app, 11, 2, t);
+        assert_eq!(app.drag().unwrap().plan, DropPlan::Rejected(REDMINE));
+        drag_to(&mut app, 21, 2, t);
+        assert_eq!(app.drag().unwrap().plan, DropPlan::Nothing);
+        drag_to(&mut app, 90, 2, t);
+        assert_eq!(app.drag().unwrap().plan, DropPlan::Nothing);
+    }
+
+    #[test]
+    fn reorder_past_the_last_item_lands_on_the_last_row() {
+        let mut app = loaded_app();
+        let t = Instant::now();
+        down(&mut app, 1, 1, t);
+        drag_to(&mut app, 1, 9, t);
+        assert_eq!(
+            app.drag().unwrap().plan,
+            DropPlan::Reorder { idx: SOZLU, row: 2 }
+        );
+        assert_eq!(
+            up(&mut app, 1, 9, t),
+            vec![plain_action(SOZLU, "t1", "reorder", json!({"position": 2}))]
+        );
     }
 
     #[test]
