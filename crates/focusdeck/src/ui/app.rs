@@ -568,12 +568,13 @@ impl App {
     }
 
     pub fn reopen_capture(&mut self, text: &str) {
+        let input = text.to_owned();
         match &mut self.mode {
-            Mode::Capture { input } if input.is_empty() => *input = text.to_owned(),
-            Mode::Capture { input } => *input = format!("{text} {input}"),
-            _ => self.enter_mode(Mode::Capture {
-                input: text.to_owned(),
-            }),
+            Mode::Capture { input: typed } if typed.is_empty() => *typed = input,
+            Mode::Capture { input: typed } => *typed = format!("{input} {typed}"),
+            // An overlay already remembers the view under it, and that view is where Esc must lead.
+            Mode::Help | Mode::MovePicker { .. } => self.mode = Mode::Capture { input },
+            _ => self.enter_mode(Mode::Capture { input }),
         }
     }
 
@@ -1991,6 +1992,20 @@ mod tests {
         app.reopen_capture("not");
         app.on_key(code(KeyCode::Esc));
         assert_eq!(app.mode, Mode::Zoom(SOZLU));
+    }
+
+    #[test]
+    fn reopened_capture_over_an_overlay_returns_to_the_view_under_it() {
+        for open in ['?', 'm'] {
+            let mut app = loaded_app();
+            app.focus = ZULIP;
+            app.mode = Mode::Zoom(ZULIP);
+            app.on_key(key(open));
+            assert_ne!(app.mode, Mode::Zoom(ZULIP), "{open}");
+            app.reopen_capture("not");
+            app.on_key(code(KeyCode::Esc));
+            assert_eq!(app.mode, Mode::Zoom(ZULIP), "{open}");
+        }
     }
 
     fn plan_view() -> App {
