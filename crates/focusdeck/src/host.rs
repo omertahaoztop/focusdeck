@@ -318,7 +318,9 @@ async fn read_capped<R: AsyncBufRead + Unpin>(
 }
 
 fn open_log(path: &std::path::Path) -> Option<tokio::fs::File> {
-    crate::private::log(path).ok().map(tokio::fs::File::from_std)
+    crate::private::log(path)
+        .ok()
+        .map(tokio::fs::File::from_std)
 }
 
 async fn log_stderr<R: AsyncRead + Unpin>(label: String, stderr: R, path: PathBuf) {

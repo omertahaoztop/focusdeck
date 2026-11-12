@@ -146,11 +146,17 @@ async fn read_local(path: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(buf)
 }
 
+// a loopback http hop is only for a user who pointed the installer at loopback themselves
+fn redirect_allowed(first: &reqwest::Url, next: &reqwest::Url) -> bool {
+    next.scheme() != "http" || (is_loopback(first) && is_loopback(next))
+}
+
 async fn fetch_http(url: &str) -> anyhow::Result<Vec<u8>> {
-    let https_only = reqwest::redirect::Policy::custom(|attempt| {
+    let first = reqwest::Url::parse(url).with_context(|| download_failed(url))?;
+    let https_only = reqwest::redirect::Policy::custom(move |attempt| {
         if attempt.previous().len() >= 5 {
             attempt.error(t(msg::INSTALL_TOO_MANY_REDIRECTS))
-        } else if attempt.url().scheme() == "http" && !is_loopback(attempt.url()) {
+        } else if !redirect_allowed(&first, attempt.url()) {
             let message = insecure(attempt.url().as_str());
             attempt.error(message)
         } else {
@@ -435,4 +441,40 @@ pub fn remove(plugin_dir: &Path, name: &str) -> anyhow::Result<()> {
         bail!(t_args(msg::INSTALL_NOT_INSTALLED, &[("name", name.into())]));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_loopback_first_url_may_be_redirected_to_loopback_http() {
+        let cases = [
+            ("http://127.0.0.1:1/a", "http://localhost:2/b", true),
+            ("https://registry.example/a", "http://127.0.0.1:1/b", false),
+            (
+                "https://registry.example/a",
+                "https://other.example/b",
+                true,
+            ),
+            (
+                "https://registry.example/a",
+                "http://other.example/b",
+                false,
+            ),
+            ("http://127.0.0.1:1/a", "http://other.example/b", false),
+            ("http://127.0.0.1:1/a", "https://other.example/b", true),
+        ];
+        for (first, next, allowed) in cases {
+            let (first, next) = (
+                reqwest::Url::parse(first).unwrap(),
+                reqwest::Url::parse(next).unwrap(),
+            );
+            assert_eq!(
+                redirect_allowed(&first, &next),
+                allowed,
+                "{first} -> {next}"
+            );
+        }
+    }
 }
