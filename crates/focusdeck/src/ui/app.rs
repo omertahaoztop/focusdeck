@@ -717,6 +717,8 @@ impl App {
             return Vec::new();
         };
         if self.boxes[target].pending > 0 {
+            let title = self.boxes[target].spec.title.as_str();
+            self.flash = Some(t_args(msg::FLASH_BOX_BUSY, &[("title", title.into())]));
             return Vec::new();
         }
         let spec = &self.boxes[idx].spec;
@@ -2014,6 +2016,15 @@ mod tests {
         app.mode = Mode::Zoom(REDMINE);
         app.boxes[REDMINE].selected = 1;
         app
+    }
+
+    #[test]
+    fn space_on_a_busy_plan_box_says_so() {
+        let mut app = plan_view();
+        app.boxes[SOZLU].pending = 1;
+        assert!(app.on_key(key(' ')).is_empty());
+        assert_eq!(app.flash.as_deref(), Some("sozlu box is busy"));
+        assert_eq!(app.confirm, None);
     }
 
     fn delete_t2() -> Effect {
