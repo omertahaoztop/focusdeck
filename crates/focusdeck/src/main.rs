@@ -54,8 +54,9 @@ async fn async_main() -> ExitCode {
 }
 
 fn init_language() {
-    let language = Config::load(&Paths::from_env())
+    let language = Paths::from_env()
         .ok()
+        .and_then(|paths| Config::load(&paths).ok())
         .and_then(|config| config.language);
     let requested = focusdeck_i18n::requested(
         language.as_deref(),
@@ -68,7 +69,7 @@ fn init_language() {
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Some(Command::Plugin { action }) => {
-            let paths = Paths::from_env();
+            let paths = Paths::from_env().map_err(anyhow::Error::msg)?;
             let config = Config::load(&paths)?;
             focusdeck::cli::run_plugin(
                 action,
@@ -102,7 +103,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 }
 
 fn load_profile(flag: Option<&str>) -> anyhow::Result<(Paths, Config, Profile)> {
-    let paths = Paths::from_env();
+    let paths = Paths::from_env().map_err(anyhow::Error::msg)?;
     let config = Config::load(&paths)?;
     let env_profile = std::env::var("FOCUSDECK_PROFILE").ok();
     let name = profile::resolve_name(&paths, flag, env_profile.as_deref(), &config)?;

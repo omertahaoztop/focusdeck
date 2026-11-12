@@ -25,6 +25,7 @@ hint-action-done = x bitti
 hint-action-unstar = u yıldızı kaldır
 hint-zoom-plan = boşluk planıma al
 hint-zoom-search = / ara
+hint-zoom-reorder = Shift+↑↓ sırala
 hint-zoom-back = Esc geri
 hint-capture = Enter kaydet · Esc vazgeç · @kişi #etiket R123 · sonda 14:30, yarın 09:00, 30dk
 hint-picker = 1-9 hedef kutu · Esc vazgeç
@@ -40,14 +41,17 @@ drag-cancel = { $what } · Esc vazgeç
 
 # Key list opened with "?", one key per line, keys padded with two spaces.
 help-title = Tuşlar
+help-select = ↑↓, PageUp/PageDown, Home/End  öğe seç (sayfa tuşları: büyütülmüş kutu)
+help-reorder = Shift+↑↓  öğeyi yukarı veya aşağı taşı (büyütülmüş kutu)
+help-mouse = fare  tıkla seç · çift tıkla büyüt · sürükle taşı veya sırala
 help-note = a  not al (capture_into kutusuna)
 help-done = x  seçili öğe bitti
 help-unstar = u  yıldızı kaldır
 help-move = m  başka kutuya taşı
-help-plan = boşluk  planıma al / çıkar (büyütülmüş kutu)
+help-plan = boşluk  planıma al · ikinci boşluk siler (büyütülmüş kutu)
 help-open = o  linki tarayıcıda aç
 help-search = /  ara (büyütülmüş kutu)
-help-next = Tab, oklar  kutu değiştir (↑↓ liste ucunda)
+help-next = Tab, Shift+Tab, oklar  kutu değiştir (↑↓ liste ucunda)
 help-zoom = Enter  kutuyu büyüt · Esc geri
 help-quit = q  çık
 
@@ -56,6 +60,7 @@ box-count = { $total }
 box-planned = { $planned } / { $total }
 box-overdue = { $count } gecikmiş
 box-error = hata: { $message }
+box-no-matches = "{ $query }" için eşleşme yok
 
 picker-title = Nereye taşınsın
 capture-title = Not al
@@ -64,7 +69,7 @@ status-refreshed = yenilendi { $time }
 status-not-refreshed = yenilenmedi
 
 # Messages flashed on the top line.
-flash-action-failed = { $what } başarısız: { $message }
+flash-action-failed = { $box }: { $what } başarısız: { $message }
 flash-no-done = bu kutuda bitirme yok
 flash-no-unstar = bu kutuda yıldız kaldırma yok
 flash-no-link = bu öğenin linki yok
@@ -75,6 +80,9 @@ flash-box-stopped = { $title } kutusunun plugin görevi durdu
 flash-no-capture-into = profilde capture_into yok
 flash-capture-failed = not eklenemedi: { $message }
 flash-open-failed = xdg-open başlatılamadı: { $error }
+flash-confirm-unplan = tekrar boşluk, "{ $title }" öğesini { $box } kutusundan siler
+flash-no-move-target = hiçbir kutu taşınan öğeyi kabul etmiyor
+flash-link-unsupported = bu tür link açılamaz: { $url }
 
 terminal-raw-mode = terminal ham kipe alınamadı
 terminal-alt-screen = alternatif ekrana geçilemedi
@@ -108,6 +116,7 @@ error-plugin-not-installed = { $plugin } kurulu değil, focusdeck plugin install
 error-secret-missing = { $path } bulunamadı
 error-secret-exposed = { $path } dosyasını başkaları okuyabiliyor, chmod 600 yap
 error-secret-unreadable = { $path } denetlenemedi: { $error }
+error-no-base-dir = { $var } ayarlı değil ve ev dizini bulunamadı
 
 config-read-failed = { $path } okunamadı
 config-invalid = { $path } geçersiz
@@ -133,7 +142,7 @@ install-read-failed = { $path } okunamadı
 install-unsupported-url = desteklenmeyen adres (yalnız http, https, file): { $url }
 install-file-too-large = dosya çok büyük
 install-too-many-redirects = çok fazla yönlendirme
-install-redirect-downgrade = https adresinden http adresine yönlendirme reddedildi
+install-insecure-url = düz http reddedildi (https kullan): { $url }
 install-http-client = HTTP istemcisi kurulamadı
 install-download-failed = { $url } indirilemedi
 install-http-status = { $url } indirilemedi: HTTP { $status }
@@ -154,6 +163,8 @@ install-delete-failed = { $path } silinemedi
 install-not-installed = plugin kurulu değil: { $name }
 install-local-builtin = local focusdeck ile birlikte gelir, kurulacak bir şey yok
 install-local-not-removable = local focusdeck ile birlikte gelir, kaldırılamaz
+install-remote-file-target = { $registry } adresindeki dizin { $name } için yerel bir dosya gösteriyor
+install-binary-changed = { $name } artık manifestiyle uyuşmuyor; "focusdeck plugin install { $name }" komutunu yeniden çalıştır
 
 # Notification titles and bodies of "focusdeck capture" and the rofi prompt label.
 capture-prompt = Not
@@ -167,6 +178,7 @@ capture-empty-title = başlık boş
 capture-command-empty = capture_command boş
 capture-prompt-spawn-failed = { $program } başlatılamadı: { $error }
 capture-no-box = { $target } kutusu yok
+capture-interrupted = not gönderilmeden kesildi
 
 remind-write-failed = { $path } yazılamadı
 
@@ -178,6 +190,7 @@ host-protocol-mismatch = protokol uyuşmuyor: çekirdek { $expected }, plugin { 
 host-invalid-result = geçersiz sonuç: { $error }
 host-invalid-describe = geçersiz describe: { $error }
 host-non-utf8 = UTF-8 olmayan çıktı
+host-line-too-long = plugin 16 MiB'tan uzun bir satır yazdı
 
 local-file-corrupt = { $path } okunamadı ({ $error }); focusdeck bu dosyaya yazmayacak
 local-file-newer = { $path } daha yeni bir focusdeck ile yazılmış (biçim { $version }); focusdeck'i güncelle

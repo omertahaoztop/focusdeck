@@ -1,6 +1,7 @@
 //! Runs one plugin process and speaks line-delimited JSON with it.
 
-use std::path::PathBuf;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -11,12 +12,14 @@ use crate::i18n::{self, msg, t, t_args};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::fs::OpenOptions;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 const BAD_LINE_LIMIT: usize = 200;
+const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_STDERR_LINE: usize = 64 * 1024;
+const LOG_RETRY_STEP: u64 = 64 * 1024;
 
 #[derive(Debug)]
 pub enum HostError {
@@ -62,7 +65,8 @@ impl std::error::Error for HostError {}
 struct Proc {
     child: Child,
     stdin: ChildStdin,
-    stdout: Lines<BufReader<ChildStdout>>,
+    stdout: BufReader<ChildStdout>,
+    max_line: usize,
     next_id: u64,
 }
 
@@ -80,6 +84,7 @@ pub struct PluginHost {
     log: PathBuf,
     lang: Option<String>,
     timeout: Duration,
+    max_line: usize,
     proc: Option<Proc>,
     describe: Option<Describe>,
 }
@@ -94,6 +99,7 @@ impl PluginHost {
             log,
             lang: None,
             timeout: DEFAULT_TIMEOUT,
+            max_line: MAX_LINE_BYTES,
             proc: None,
             describe: None,
         }
@@ -111,6 +117,11 @@ impl PluginHost {
 
     pub fn with_timeout(mut self, d: Duration) -> Self {
         self.timeout = d;
+        self
+    }
+
+    pub fn with_max_line(mut self, bytes: usize) -> Self {
+        self.max_line = bytes;
         self
     }
 
@@ -216,7 +227,8 @@ impl PluginHost {
         Ok(Proc {
             child,
             stdin,
-            stdout: BufReader::new(stdout).lines(),
+            stdout: BufReader::new(stdout),
+            max_line: self.max_line,
             next_id: 0,
         })
     }
@@ -243,14 +255,18 @@ async fn exchange(
             .await
             .map_err(|_| HostError::Crashed)?;
         proc.stdin.flush().await.map_err(|_| HostError::Crashed)?;
-        let reply = match proc.stdout.next_line().await {
-            Ok(Some(reply)) => reply,
-            Ok(None) => return Err(HostError::Crashed),
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                return Err(HostError::BadLine(t(msg::HOST_NON_UTF8)));
+        let bytes = match read_capped(&mut proc.stdout, proc.max_line, false).await {
+            Ok(Some(line)) if line.overflowed => {
+                return Err(HostError::BadLine(t(msg::HOST_LINE_TOO_LONG)));
             }
-            Err(_) => return Err(HostError::Crashed),
+            Ok(Some(line)) => line.bytes,
+            Ok(None) | Err(_) => return Err(HostError::Crashed),
         };
+        let mut reply =
+            String::from_utf8(bytes).map_err(|_| HostError::BadLine(t(msg::HOST_NON_UTF8)))?;
+        if reply.ends_with('\r') {
+            reply.pop();
+        }
         let response: Response =
             serde_json::from_str(&reply).map_err(|_| HostError::BadLine(clip(&reply)))?;
         if response.id != id {
@@ -270,29 +286,80 @@ fn clip(line: &str) -> String {
     line.chars().take(BAD_LINE_LIMIT).collect()
 }
 
-async fn log_stderr(label: String, stderr: ChildStderr, path: PathBuf) {
-    let mut lines = BufReader::new(stderr).lines();
-    let mut file = open_log(&path).await;
-    while let Ok(Some(line)) = lines.next_line().await {
-        // keeps draining when the log is unwritable so the child never blocks on a full pipe
-        let Some(f) = file.as_mut() else { continue };
-        let entry = format!("[{label}] {line}\n");
-        if f.write_all(entry.as_bytes()).await.is_err() || f.flush().await.is_err() {
-            file = None;
+struct Capped {
+    bytes: Vec<u8>,
+    overflowed: bool,
+}
+
+// with `drain` the rest of an over-long line is read and dropped; without it the read stops at the first excess byte
+async fn read_capped<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+    drain: bool,
+) -> std::io::Result<Option<Capped>> {
+    let mut bytes = Vec::new();
+    let mut overflowed = false;
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            return Ok((!bytes.is_empty() || overflowed).then_some(Capped { bytes, overflowed }));
+        }
+        let newline = buf.iter().position(|&b| b == b'\n');
+        let chunk = &buf[..newline.unwrap_or(buf.len())];
+        let take = chunk.len().min(max - bytes.len());
+        bytes.extend_from_slice(&chunk[..take]);
+        overflowed |= take < chunk.len();
+        let used = chunk.len() + usize::from(newline.is_some());
+        reader.consume(used);
+        if newline.is_some() || (overflowed && !drain) {
+            return Ok(Some(Capped { bytes, overflowed }));
         }
     }
 }
 
-async fn open_log(path: &PathBuf) -> Option<tokio::fs::File> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.ok()?;
+// A failed rotation leaves the file over the limit, so the next try waits for a step of growth; a handle that cannot be inspected is dropped instead of reopened on every line.
+async fn open_log(path: &Path) -> Option<(tokio::fs::File, u64)> {
+    let file = tokio::fs::File::from_std(crate::private::log(path).ok()?);
+    let len = file.metadata().await.ok()?.len();
+    let limit = if len > crate::private::LOG_LIMIT {
+        len + LOG_RETRY_STEP
+    } else {
+        crate::private::LOG_LIMIT
+    };
+    Some((file, limit))
+}
+
+// The handle is replaced when it is past the limit, cannot be inspected, or is no longer the file at the path because someone rotated or deleted the log.
+async fn needs_reopen(file: &tokio::fs::File, path: &Path, limit: u64) -> bool {
+    let Ok(open) = file.metadata().await else {
+        return true;
+    };
+    if open.len() > limit {
+        return true;
     }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await
-        .ok()
+    match tokio::fs::metadata(path).await {
+        Ok(named) => (named.dev(), named.ino()) != (open.dev(), open.ino()),
+        Err(_) => true,
+    }
+}
+
+async fn log_stderr<R: AsyncRead + Unpin>(label: String, stderr: R, path: PathBuf) {
+    let mut reader = BufReader::new(stderr);
+    let mut log = open_log(&path).await;
+    while let Ok(Some(line)) = read_capped(&mut reader, MAX_STDERR_LINE, true).await {
+        if let Some((f, limit)) = &log
+            && needs_reopen(f, &path, *limit).await
+        {
+            log = open_log(&path).await;
+        }
+        // keeps draining when the log is unwritable so the child never blocks on a full pipe
+        let Some((f, _)) = log.as_mut() else { continue };
+        let text = String::from_utf8_lossy(&line.bytes);
+        let entry = format!("[{label}] {}\n", text.strip_suffix('\r').unwrap_or(&text));
+        if f.write_all(entry.as_bytes()).await.is_err() || f.flush().await.is_err() {
+            log = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -348,5 +415,77 @@ mod tests {
         let command = host.command();
         let args: Vec<_> = command.as_std().get_args().collect();
         assert_eq!(args, ["serve-local"]);
+    }
+
+    #[tokio::test]
+    async fn a_chatty_writer_rotates_the_log_while_it_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("focusdeck.log");
+        let line = format!("{}\n", "x".repeat(99));
+        let limit = usize::try_from(crate::private::LOG_LIMIT).unwrap();
+        let input = line.repeat((limit + limit / 8) / line.len());
+        log_stderr("p".into(), std::io::Cursor::new(input), path.clone()).await;
+        let entry = "[p] ".len() + line.len();
+        assert!(dir.path().join("focusdeck.log.1").exists());
+        assert!(std::fs::metadata(&path).unwrap().len() <= (limit + entry) as u64);
+    }
+
+    async fn second_line_after(disturb: impl FnOnce(&std::path::Path)) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("focusdeck.log");
+        let (mut tx, rx) = tokio::io::duplex(1024);
+        let task = tokio::spawn(log_stderr("p".into(), rx, path.clone()));
+        tx.write_all(b"first\n").await.unwrap();
+        let first_logged = async {
+            while !std::fs::read_to_string(&path).is_ok_and(|s| s.contains("first")) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), first_logged)
+            .await
+            .unwrap();
+        disturb(&path);
+        tx.write_all(b"second\n").await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    }
+
+    fn fill_past_the_limit(path: &std::path::Path) {
+        use std::io::Write as _;
+        let filler = vec![b'x'; usize::try_from(crate::private::LOG_LIMIT).unwrap() + 1];
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(&filler)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_quiet_writer_follows_a_log_another_process_rotated() {
+        let log = second_line_after(|path| {
+            fill_past_the_limit(path);
+            std::fs::rename(path, path.with_extension("log.1")).unwrap();
+        })
+        .await;
+        assert_eq!(log, "[p] second\n");
+    }
+
+    #[tokio::test]
+    async fn a_quiet_writer_follows_a_log_that_was_deleted() {
+        let log = second_line_after(|path| std::fs::remove_file(path).unwrap()).await;
+        assert_eq!(log, "[p] second\n");
+    }
+
+    #[tokio::test]
+    async fn a_log_that_cannot_rotate_still_takes_every_line() {
+        let log = second_line_after(|path| {
+            std::fs::create_dir(path.with_extension("log.1")).unwrap();
+            fill_past_the_limit(path);
+        })
+        .await;
+        assert!(log.starts_with("[p] first\n"));
+        assert!(log.ends_with("[p] second\n"));
     }
 }

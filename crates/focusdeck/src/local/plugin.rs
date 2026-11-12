@@ -15,6 +15,7 @@ use crate::i18n::{self, msg, t, t_args};
 use crate::paths::Paths;
 
 const POSITION_STEP: f64 = 1024.0;
+const MIN_GAP: f64 = 1e-6;
 
 pub struct Local {
     store: Store,
@@ -59,6 +60,18 @@ fn in_order<'a>(items: &'a [Record], list: &'a str) -> Vec<&'a Record> {
     open
 }
 
+fn renumber(items: &mut [Record], list: &str) {
+    let order: Vec<String> = in_order(items, list)
+        .into_iter()
+        .map(|r| r.id.clone())
+        .collect();
+    for (n, id) in order.iter().enumerate() {
+        if let Some(record) = items.iter_mut().find(|r| r.id == *id) {
+            record.position = POSITION_STEP * (n + 1) as f64;
+        }
+    }
+}
+
 fn last_position(items: &[Record], list: &str) -> f64 {
     open_in(items, list)
         .map(|r| r.position)
@@ -82,19 +95,21 @@ fn to_item(record: &Record, now: DateTime<FixedOffset>) -> Item {
     }
 }
 
-fn place_between(others: &[f64], wanted: usize) -> f64 {
-    match (others.first(), others.last()) {
-        (None, _) | (_, None) => POSITION_STEP,
+// None means the two neighbours are too close to split again.
+fn place_between(others: &[f64], wanted: usize) -> Option<f64> {
+    let (before, after) = match (others.first(), others.last()) {
+        (None, _) | (_, None) => return Some(POSITION_STEP),
         (Some(first), _) if wanted == 0 => {
             if *first > 0.0 {
-                first / 2.0
+                (0.0, *first)
             } else {
-                first - POSITION_STEP
+                return Some(first - POSITION_STEP);
             }
         }
-        (_, Some(last)) if wanted >= others.len() => last + POSITION_STEP,
-        _ => (others[wanted - 1] + others[wanted]) / 2.0,
-    }
+        (_, Some(last)) if wanted >= others.len() => return Some(last + POSITION_STEP),
+        _ => (others[wanted - 1], others[wanted]),
+    };
+    (after - before >= MIN_GAP).then(|| (before + after) / 2.0)
 }
 
 impl Local {
@@ -120,12 +135,21 @@ impl Local {
                 .iter()
                 .position(|r| r.id == id && is_open_in(r, list))
                 .ok_or_else(|| item_missing(id))?;
-            let others: Vec<f64> = in_order(items, list)
-                .into_iter()
-                .filter(|r| r.id != id)
-                .map(|r| r.position)
-                .collect();
-            items[index].position = place_between(&others, wanted);
+            let others_of = |items: &[Record]| -> Vec<f64> {
+                in_order(items, list)
+                    .into_iter()
+                    .filter(|r| r.id != id)
+                    .map(|r| r.position)
+                    .collect()
+            };
+            let position = match place_between(&others_of(items), wanted) {
+                Some(position) => position,
+                None => {
+                    renumber(items, list);
+                    place_between(&others_of(items), wanted).ok_or_else(|| item_missing(id))?
+                }
+            };
+            items[index].position = position;
             Ok(())
         }))
     }
@@ -252,7 +276,8 @@ impl Plugin for Local {
 }
 
 pub fn serve_stdio() -> io::Result<()> {
-    let plugin = Local::new(Store::from_paths(&Paths::from_env()));
+    let paths = Paths::from_env().map_err(io::Error::other)?;
+    let plugin = Local::new(Store::from_paths(&paths));
     focusdeck_protocol::serve(plugin, io::stdin().lock(), io::stdout().lock())
 }
 
@@ -460,6 +485,34 @@ mod tests {
         let all = stored(&dir);
         let pos = |id: &str| all.iter().find(|r| r.id == id).unwrap().position;
         assert_eq!(pos("c"), 1536.0);
+    }
+
+    #[test]
+    fn repeated_reorders_into_one_slot_keep_positions_distinct() {
+        let (dir, mut local) = seeded(vec![
+            record("a", "ev", 1024.0),
+            record("b", "ev", 2048.0),
+            record("c", "ev", 3072.0),
+        ]);
+        let mut want = vec!["a", "b", "c"];
+        for _ in 0..80 {
+            let last = want.pop().unwrap();
+            want.insert(1, last);
+            local
+                .action(act(last, "reorder", json!({"position": 1})))
+                .unwrap();
+            assert_eq!(ids(&local.list(summary()).unwrap()), want);
+        }
+        let mut positions: Vec<f64> = stored(&dir).iter().map(|r| r.position).collect();
+        positions.sort_by(f64::total_cmp);
+        assert!(positions.windows(2).all(|w| w[1] - w[0] >= MIN_GAP));
+    }
+
+    #[test]
+    fn place_between_reports_crowded_neighbours() {
+        assert_eq!(place_between(&[1.0, 1.0 + MIN_GAP / 2.0], 1), None);
+        assert_eq!(place_between(&[MIN_GAP / 2.0], 0), None);
+        assert_eq!(place_between(&[1.0, 3.0], 1), Some(2.0));
     }
 
     #[test]

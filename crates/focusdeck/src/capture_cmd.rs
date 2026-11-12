@@ -1,11 +1,12 @@
 //! `focusdeck capture`: parses a note and drops it into the capture_into box, queueing it on failure.
 
-use std::path::PathBuf;
+use std::collections::VecDeque;
 use std::process::Stdio;
 
 use chrono::{DateTime, FixedOffset};
 use focusdeck_protocol::{DropParams, Item};
 use tokio::process::Command;
+use tokio::signal::unix::{Signal, SignalKind, signal};
 
 use crate::capture;
 use crate::config::Config;
@@ -14,34 +15,8 @@ use crate::i18n::{self, msg, t, t_args};
 use crate::notify;
 use crate::paths::Paths;
 use crate::profile::Profile;
-use crate::queue::{Queue, Queued};
+use crate::queue::{Queue, Queued, Taken};
 use crate::ui::run::build_host;
-
-// Whatever is still in `items` when this goes away, by return, `?` or panic, lands back in the queue.
-struct Unsent<'a> {
-    queue: &'a Queue,
-    log: PathBuf,
-    items: Vec<Queued>,
-}
-
-impl Unsent<'_> {
-    fn flush(&mut self) -> std::io::Result<()> {
-        if self.items.is_empty() {
-            return Ok(());
-        }
-        self.queue.put_back(&self.items)?;
-        self.items.clear();
-        Ok(())
-    }
-}
-
-impl Drop for Unsent<'_> {
-    fn drop(&mut self) {
-        if let Err(e) = self.flush() {
-            notify::log_line(&self.log, &format!("could not write the queue: {e}"));
-        }
-    }
-}
 
 pub async fn run(
     paths: &Paths,
@@ -81,57 +56,156 @@ pub async fn run(
         None => parsed.title,
     };
 
+    let mut stop = Stop::new()?;
     let queue = Queue::new(paths.state_dir.join("capture-queue.jsonl"));
-    let mut pending = match queue.take_all() {
-        Ok(taken) => taken,
-        Err(e) => {
-            notify::log_line(&log, &format!("could not read the queue: {e}"));
-            Vec::new()
-        }
-    };
-    let queued_before = pending.len();
-    pending.push(Queued {
+    let entry = Queued {
         text,
         at: now,
         lang: Some(i18n::current().lang().to_owned()),
-    });
-    let mut unsent = Unsent {
-        queue: &queue,
-        log: log.clone(),
-        items: pending,
+    };
+    // The note reaches the disk before anything else can go wrong; a kill from here on loses nothing.
+    let pushed = queue.push_entry(&entry);
+    if let Err(e) = &pushed {
+        notify::log_line(&log, &format!("could not write the queue: {e}"));
+    }
+    let mut taken = match queue.take() {
+        Ok(taken) => taken,
+        Err(e) => {
+            notify::log_line(&log, &format!("could not read the queue: {e}"));
+            if pushed.is_ok() {
+                let title = t(msg::CAPTURE_QUEUED_TITLE);
+                notify::send_logged(&log, &title, &e.to_string(), true);
+                return Ok(1);
+            }
+            // With no queue to fall back on, sending now is the only way the note survives.
+            Taken::default()
+        }
+    };
+    let mut items = std::mem::take(&mut taken.items);
+    // Without a queue write the note only exists in memory; the last item is the new one either way.
+    let own = if pushed.is_ok() {
+        items.iter().rposition(|i| *i == entry)
+    } else {
+        items.push(entry);
+        Some(items.len() - 1)
+    };
+    let mut progress = Progress {
+        items: items.into(),
+        popped: 0,
+        own,
+        queued_sent: 0,
     };
 
-    let outcome = deliver(paths, cfg, profile, target, &mut unsent, &log).await;
-    let flushed = unsent.flush();
-    let failed = outcome.is_err() || flushed.is_err();
-    match (outcome, flushed) {
-        (Ok(()), _) => {
-            let body = if queued_before > 0 {
-                format!(
-                    "{shown}\n{}",
-                    t_args(
-                        msg::CAPTURE_QUEUE_FLUSHED,
-                        &[("count", queued_before.into())]
-                    )
-                )
+    let outcome = tokio::select! {
+        result = deliver(paths, cfg, profile, target, &mut progress, &log) => Outcome::Done(result),
+        () = stop.wait() => Outcome::Interrupted,
+    };
+    let unsent: Vec<Queued> = progress.items.iter().cloned().collect();
+    let committed = queue.commit(taken, &unsent);
+    let code = exit_code(&outcome, committed.is_err());
+    match (outcome, committed) {
+        (Outcome::Done(Ok(())), committed) => {
+            if let Err(e) = committed {
+                notify::log_line(&log, &format!("could not update the queue: {e}"));
+            }
+            if handed_over(pushed.is_ok(), progress.own) {
+                notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &shown, false);
             } else {
-                shown
-            };
-            notify::send_logged(&log, &t(msg::CAPTURE_ADDED_TITLE), &body, false);
+                let body = if progress.queued_sent > 0 {
+                    format!(
+                        "{shown}\n{}",
+                        t_args(
+                            msg::CAPTURE_QUEUE_FLUSHED,
+                            &[("count", progress.queued_sent.into())]
+                        )
+                    )
+                } else {
+                    shown
+                };
+                notify::send_logged(&log, &t(msg::CAPTURE_ADDED_TITLE), &body, false);
+            }
         }
-        (Err(e), Ok(())) => {
+        (Outcome::Done(Err(e)), Ok(())) => {
             notify::log_line(&log, &format!("{target}: {e}"));
             notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &e, true);
         }
-        (Err(e), Err(io)) => {
+        (Outcome::Interrupted, Ok(())) => {
             notify::log_line(
                 &log,
-                &format!("{target}: {e}; could not write the queue: {io}"),
+                "interrupted while sending, the unsent notes are queued",
             );
-            notify::send_logged(&log, &t(msg::CAPTURE_LOST_TITLE), &io.to_string(), true);
+            notify::send_logged(
+                &log,
+                &t(msg::CAPTURE_QUEUED_TITLE),
+                &t(msg::CAPTURE_INTERRUPTED),
+                true,
+            );
+        }
+        (Outcome::Done(Err(e)), Err(io)) => {
+            report_commit_failure(&log, &format!("{target}: {e}"), &io, pushed.is_ok());
+        }
+        (Outcome::Interrupted, Err(io)) => {
+            report_commit_failure(&log, "interrupted", &io, pushed.is_ok());
         }
     }
-    Ok(i32::from(failed))
+    Ok(code)
+}
+
+fn exit_code(outcome: &Outcome, commit_failed: bool) -> i32 {
+    i32::from(!matches!(outcome, Outcome::Done(Ok(()))) || commit_failed)
+}
+
+// The taken files still hold every note when the push worked, so only a failed push makes a failed commit a loss.
+fn commit_failure_title(pushed: bool) -> &'static str {
+    if pushed {
+        msg::CAPTURE_QUEUED_TITLE
+    } else {
+        msg::CAPTURE_LOST_TITLE
+    }
+}
+
+fn report_commit_failure(log: &std::path::Path, why: &str, io: &std::io::Error, pushed: bool) {
+    notify::log_line(log, &format!("{why}; could not write the queue: {io}"));
+    let title = t(commit_failure_title(pushed));
+    notify::send_logged(log, &title, &io.to_string(), true);
+}
+
+// A concurrent run took the queue file that holds this note, so that run delivers it.
+fn handed_over(pushed: bool, own: Option<usize>) -> bool {
+    pushed && own.is_none()
+}
+
+enum Outcome {
+    Done(Result<(), String>),
+    Interrupted,
+}
+
+struct Progress {
+    items: VecDeque<Queued>,
+    popped: usize,
+    own: Option<usize>,
+    queued_sent: usize,
+}
+
+struct Stop {
+    term: Signal,
+    int: Signal,
+}
+
+impl Stop {
+    fn new() -> std::io::Result<Stop> {
+        Ok(Stop {
+            term: signal(SignalKind::terminate())?,
+            int: signal(SignalKind::interrupt())?,
+        })
+    }
+
+    async fn wait(&mut self) {
+        tokio::select! {
+            _ = self.term.recv() => {}
+            _ = self.int.recv() => {}
+        }
+    }
 }
 
 fn parse(
@@ -196,7 +270,7 @@ async fn deliver(
     cfg: &Config,
     profile: &Profile,
     target: &str,
-    unsent: &mut Unsent<'_>,
+    progress: &mut Progress,
     log: &std::path::Path,
 ) -> Result<(), String> {
     let spec = profile
@@ -205,9 +279,10 @@ async fn deliver(
         .ok_or_else(|| t_args(msg::CAPTURE_NO_BOX, &[("target", target.into())]))?;
     let home = dirs::home_dir().unwrap_or_default();
     let mut host: PluginHost = build_host(paths, &home, spec)?;
-    while let Some(entry) = unsent.items.first() {
+    while let Some(entry) = progress.items.front() {
         let lang = entry.lang.as_deref().or(i18n::requested());
         let words = capture::Words::new(&i18n::localizer(lang), &cfg.capture_words);
+        let is_own = progress.own == Some(progress.popped);
         match parse(profile, &entry.text, entry.at, &words) {
             Ok(parsed) => {
                 let drop = DropParams {
@@ -217,10 +292,14 @@ async fn deliver(
                 host.call::<_, Item>("drop", &drop)
                     .await
                     .map_err(|e| e.to_string())?;
+                if !is_own {
+                    progress.queued_sent += 1;
+                }
             }
             Err(e) => notify::log_line(log, &format!("skipped a queued note: {e}")),
         }
-        unsent.items.remove(0);
+        progress.items.pop_front();
+        progress.popped += 1;
     }
     Ok(())
 }
@@ -239,6 +318,27 @@ mod tests {
         assert_eq!(count(&tr, 2), "kuyruktan 2 not gönderildi");
         assert_eq!(count(&en, 1), "1 note sent from the queue");
         assert_eq!(count(&en, 2), "2 notes sent from the queue");
+    }
+
+    #[test]
+    fn note_taken_by_another_run_is_handed_over() {
+        assert!(handed_over(true, None));
+        assert!(!handed_over(true, Some(0)));
+        assert!(!handed_over(false, Some(0)));
+    }
+
+    #[test]
+    fn a_failed_commit_is_lost_only_when_the_push_failed_too() {
+        assert_eq!(commit_failure_title(true), msg::CAPTURE_QUEUED_TITLE);
+        assert_eq!(commit_failure_title(false), msg::CAPTURE_LOST_TITLE);
+    }
+
+    #[test]
+    fn a_failed_commit_fails_the_run_even_when_delivery_worked() {
+        assert_eq!(exit_code(&Outcome::Done(Ok(())), false), 0);
+        assert_eq!(exit_code(&Outcome::Done(Ok(())), true), 1);
+        assert_eq!(exit_code(&Outcome::Done(Err("x".into())), false), 1);
+        assert_eq!(exit_code(&Outcome::Interrupted, false), 1);
     }
 
     #[test]

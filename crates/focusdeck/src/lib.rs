@@ -10,6 +10,7 @@ pub mod links;
 pub mod local;
 pub mod notify;
 pub mod paths;
+pub mod private;
 pub mod profile;
 pub mod queue;
 pub mod remind;

@@ -25,6 +25,7 @@ hint-action-done = x done
 hint-action-unstar = u unstar
 hint-zoom-plan = space add to plan
 hint-zoom-search = / search
+hint-zoom-reorder = Shift+↑↓ reorder
 hint-zoom-back = Esc back
 hint-capture = Enter save · Esc cancel · @person #label R123 · at the end 14:30, tomorrow 09:00, 30min
 hint-picker = 1-9 target box · Esc cancel
@@ -40,14 +41,17 @@ drag-cancel = { $what } · Esc cancel
 
 # Key list opened with "?", one key per line, keys padded with two spaces.
 help-title = Keys
+help-select = ↑↓, PageUp/PageDown, Home/End  select item (page keys: zoomed box)
+help-reorder = Shift+↑↓  move the item up or down (zoomed box)
+help-mouse = mouse  click select · double click zoom · drag move or reorder
 help-note = a  take a note (into the capture_into box)
 help-done = x  mark the selected item done
 help-unstar = u  unstar the selected item
 help-move = m  move to another box
-help-plan = space  add to / remove from plan (zoomed box)
+help-plan = space  add to plan · a second space deletes it (zoomed box)
 help-open = o  open the link in the browser
 help-search = /  search (zoomed box)
-help-next = Tab, arrows  switch box (↑↓ at the list edge)
+help-next = Tab, Shift+Tab, arrows  switch box (↑↓ at the list edge)
 help-zoom = Enter  zoom the box · Esc back
 help-quit = q  quit
 
@@ -56,6 +60,7 @@ box-count = { $total }
 box-planned = { $planned } / { $total }
 box-overdue = { $count } overdue
 box-error = error: { $message }
+box-no-matches = no matches for "{ $query }"
 
 picker-title = Move to
 capture-title = Note
@@ -64,7 +69,7 @@ status-refreshed = refreshed { $time }
 status-not-refreshed = not refreshed yet
 
 # Messages flashed on the top line.
-flash-action-failed = { $what } failed: { $message }
+flash-action-failed = { $box }: { $what } failed: { $message }
 flash-no-done = this box has no done action
 flash-no-unstar = this box has no unstar action
 flash-no-link = this item has no link
@@ -75,6 +80,9 @@ flash-box-stopped = the plugin task of the { $title } box stopped
 flash-no-capture-into = the profile has no capture_into
 flash-capture-failed = could not add the note: { $message }
 flash-open-failed = could not start xdg-open: { $error }
+flash-confirm-unplan = space again deletes "{ $title }" from { $box }
+flash-no-move-target = no box here accepts moved items
+flash-link-unsupported = cannot open this kind of link: { $url }
 
 terminal-raw-mode = could not put the terminal in raw mode
 terminal-alt-screen = could not switch to the alternate screen
@@ -108,6 +116,7 @@ error-plugin-not-installed = { $plugin } is not installed, run focusdeck plugin 
 error-secret-missing = { $path } not found
 error-secret-exposed = { $path } is readable by others, run chmod 600
 error-secret-unreadable = could not check { $path }: { $error }
+error-no-base-dir = { $var } is not set and no home directory was found
 
 config-read-failed = could not read { $path }
 config-invalid = { $path } is invalid
@@ -133,7 +142,7 @@ install-read-failed = could not read { $path }
 install-unsupported-url = unsupported address (only http, https, file): { $url }
 install-file-too-large = file too large
 install-too-many-redirects = too many redirects
-install-redirect-downgrade = redirect from an https address to an http address refused
+install-insecure-url = refusing plain http (use https): { $url }
 install-http-client = could not build the HTTP client
 install-download-failed = could not download { $url }
 install-http-status = could not download { $url }: HTTP { $status }
@@ -154,6 +163,8 @@ install-delete-failed = could not delete { $path }
 install-not-installed = plugin is not installed: { $name }
 install-local-builtin = local comes with focusdeck, there is nothing to install
 install-local-not-removable = local comes with focusdeck and cannot be removed
+install-remote-file-target = the index at { $registry } points { $name } at a local file
+install-binary-changed = { $name } no longer matches its manifest; run "focusdeck plugin install { $name }" again
 
 # Notification titles and bodies of "focusdeck capture" and the rofi prompt label.
 capture-prompt = Note
@@ -171,6 +182,7 @@ capture-empty-title = title is empty
 capture-command-empty = capture_command is empty
 capture-prompt-spawn-failed = could not start { $program }: { $error }
 capture-no-box = no box named { $target }
+capture-interrupted = interrupted before the note was sent
 
 remind-write-failed = could not write { $path }
 
@@ -182,6 +194,7 @@ host-protocol-mismatch = protocol mismatch: core { $expected }, plugin { $got }
 host-invalid-result = invalid result: { $error }
 host-invalid-describe = invalid describe: { $error }
 host-non-utf8 = output is not UTF-8
+host-line-too-long = plugin sent a line longer than 16 MiB
 
 local-file-corrupt = { $path } could not be read ({ $error }); focusdeck will not write to it
 local-file-newer = { $path } was written by a newer focusdeck (format { $version }); update focusdeck

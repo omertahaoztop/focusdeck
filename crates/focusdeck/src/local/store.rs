@@ -218,16 +218,22 @@ impl Store {
 }
 
 pub fn new_id(existing: &[Record]) -> String {
-    loop {
+    new_id_with(existing, || {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let id = format!(
+        format!(
             "{:x}{:x}{:x}",
             nanos,
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
+        )
+    })
+}
+
+fn new_id_with(existing: &[Record], mut candidate: impl FnMut() -> String) -> String {
+    loop {
+        let id = candidate();
         if existing.iter().all(|r| r.id != id) {
             return id;
         }
@@ -436,9 +442,15 @@ mod tests {
             assert!(items.iter().all(|r| r.id != id));
             items.push(record(&id, "n"));
         }
-        let first = new_id(&[]);
-        let taken = [record(&first, "taken")];
-        assert_ne!(new_id(&taken), first);
+    }
+
+    #[test]
+    fn new_id_skips_a_colliding_candidate() {
+        let taken = [record("dup", "taken")];
+        let mut candidates = ["dup", "fresh"].into_iter();
+        let id = new_id_with(&taken, || candidates.next().unwrap().to_owned());
+        assert_eq!(id, "fresh");
+        assert_eq!(candidates.next(), None);
     }
 
     #[cfg(unix)]

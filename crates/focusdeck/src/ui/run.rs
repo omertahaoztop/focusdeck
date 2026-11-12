@@ -7,7 +7,10 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use chrono::Local;
 use crossterm::cursor::Show;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    EventStream, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -28,6 +31,7 @@ use crate::config::Config;
 use crate::host::PluginHost;
 use crate::i18n::{self, msg, t, t_args};
 use crate::install;
+use crate::links::openable;
 use crate::local::LOCAL;
 use crate::paths::Paths;
 use crate::profile::Profile;
@@ -40,7 +44,13 @@ type Term = Terminal<CrosstermBackend<Stdout>>;
 
 fn restore_terminal() {
     let _ = disable_raw_mode();
-    let _ = execute!(stdout(), DisableMouseCapture, LeaveAlternateScreen, Show);
+    let _ = execute!(
+        stdout(),
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen,
+        Show
+    );
 }
 
 struct TerminalGuard;
@@ -59,8 +69,13 @@ fn enter_terminal() -> anyhow::Result<(Term, TerminalGuard)> {
     }));
     let guard = TerminalGuard;
     enable_raw_mode().with_context(|| t(msg::TERMINAL_RAW_MODE))?;
-    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
-        .with_context(|| t(msg::TERMINAL_ALT_SCREEN))?;
+    execute!(
+        stdout(),
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )
+    .with_context(|| t(msg::TERMINAL_ALT_SCREEN))?;
     let term = Terminal::new(CrosstermBackend::new(stdout()))?;
     Ok((term, guard))
 }
@@ -85,14 +100,19 @@ struct Runtime<'a> {
 }
 
 impl Runtime<'_> {
-    fn refresh(&self, app: &App, idx: usize) {
-        if let Some(Some(tx)) = self.cmds.get(idx) {
-            // a full queue means a refresh is already pending behind a slow request
-            let _ = tx.try_send(BoxCmd::Refresh(view_for(app, idx)));
+    fn refresh(&self, app: &mut App, idx: usize) {
+        let Some(Some(tx)) = self.cmds.get(idx) else {
+            return;
+        };
+        // a full queue means a refresh is already pending behind a slow request
+        if tx.try_send(BoxCmd::Refresh(view_for(app, idx))).is_ok()
+            && let Some(state) = app.boxes.get_mut(idx)
+        {
+            state.pending += 1;
         }
     }
 
-    fn send(&self, app: &mut App, idx: usize, cmd: BoxCmd) {
+    fn send(&self, app: &mut App, idx: usize, cmd: BoxCmd) -> bool {
         let title = app
             .boxes
             .get(idx)
@@ -102,25 +122,38 @@ impl Runtime<'_> {
         match self.cmds.get(idx).and_then(Option::as_ref) {
             None => app.flash = Some(flash(msg::FLASH_BOX_CLOSED)),
             Some(tx) => match tx.try_send(cmd) {
-                Ok(()) => {}
+                Ok(()) => {
+                    if let Some(state) = app.boxes.get_mut(idx) {
+                        state.pending += 1;
+                    }
+                    return true;
+                }
                 Err(TrySendError::Full(_)) => app.flash = Some(flash(msg::FLASH_BOX_BUSY)),
                 Err(TrySendError::Closed(_)) => app.flash = Some(flash(msg::FLASH_BOX_STOPPED)),
             },
         }
+        false
     }
 
     // returns true when the app should quit
     fn exec(&self, app: &mut App, effect: Effect) -> bool {
         match effect {
-            Effect::Refresh(idx, _) => self.refresh(app, idx),
+            Effect::Refresh(idx) => self.refresh(app, idx),
             Effect::Action {
                 idx,
                 item,
                 action,
                 args,
-            } => self.send(app, idx, BoxCmd::Action { item, action, args }),
+            } => {
+                self.send(app, idx, BoxCmd::Action { item, action, args });
+            }
             Effect::Drop { idx, item, from } => {
-                self.send(app, idx, BoxCmd::Drop { item, from });
+                let cmd = BoxCmd::Drop {
+                    item,
+                    from,
+                    capture: false,
+                };
+                self.send(app, idx, cmd);
             }
             Effect::Open(url) => open_url(app, &url),
             Effect::Capture(text) => self.capture(app, &text),
@@ -137,6 +170,7 @@ impl Runtime<'_> {
             .and_then(|id| self.profile.box_index(id))
         else {
             app.flash = Some(t(msg::FLASH_NO_CAPTURE_INTO));
+            app.reopen_capture(text);
             return;
         };
         let now = Local::now().fixed_offset();
@@ -147,19 +181,24 @@ impl Runtime<'_> {
             &self.profile.capture_refs,
             &self.profile.capture_label_aliases,
         ) {
-            Ok(parsed) => self.send(
-                app,
-                target,
-                BoxCmd::Drop {
+            Ok(parsed) => {
+                let cmd = BoxCmd::Drop {
                     item: parsed.into_item(),
                     from: None,
-                },
-            ),
+                    capture: true,
+                };
+                if self.send(app, target, cmd) {
+                    app.pending_capture.push_back((target, text.to_owned()));
+                } else {
+                    app.reopen_capture(text);
+                }
+            }
             Err(message) => {
                 app.flash = Some(t_args(
                     msg::FLASH_CAPTURE_FAILED,
                     &[("message", message.as_str().into())],
                 ));
+                app.reopen_capture(text);
             }
         }
     }
@@ -184,6 +223,10 @@ impl Runtime<'_> {
 }
 
 fn open_url(app: &mut App, url: &str) {
+    if !openable(url) {
+        app.flash = Some(t_args(msg::FLASH_LINK_UNSUPPORTED, &[("url", url.into())]));
+        return;
+    }
     let spawned = tokio::process::Command::new("xdg-open")
         .arg(url)
         .stdin(Stdio::null())
@@ -222,6 +265,7 @@ pub fn build_host(
                 &[("plugin", spec.plugin.as_str().into())],
             ));
         }
+        install::verify_installed(&paths.plugin_dir(), &spec.plugin).map_err(|e| e.to_string())?;
         (exe, Vec::new())
     };
     let mut config = secrets::plugin_config(spec, home).map_err(|e| e.to_string())?;
@@ -292,6 +336,19 @@ fn spawn_ticker(idx: usize, every: Duration, tx: mpsc::Sender<usize>) -> JoinHan
     })
 }
 
+fn mouse_needs_redraw(kind: MouseEventKind) -> bool {
+    !matches!(kind, MouseEventKind::Moved)
+}
+
+fn record_rows(app: &mut App, area: Rect) {
+    let rects = layout::frame_rects(area, app);
+    for (state, rect) in app.boxes.iter_mut().zip(rects) {
+        if !rect.is_empty() {
+            state.rows = usize::from(layout::list_area(rect, state.error.is_some()).height);
+        }
+    }
+}
+
 async fn event_loop(
     terminal: &mut Term,
     app: &mut App,
@@ -302,18 +359,25 @@ async fn event_loop(
     let mut input = EventStream::new();
     let mut clock = tokio::time::interval(Duration::from_secs(1));
     clock.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut redraw = true;
     loop {
         let size = terminal.size()?;
         let area = Rect::new(0, 0, size.width, size.height);
-        layout::fit_scroll(app, area);
-        terminal.draw(|frame| render::draw(frame, app))?;
+        if redraw {
+            layout::fit_scroll(app, area);
+            record_rows(app, area);
+            terminal.draw(|frame| render::draw(frame, app))?;
+        }
+        redraw = true;
 
         let zoomed_before = app.zoomed_box();
         let mut extra_refresh = Vec::new();
         let effects = tokio::select! {
             ev = input.next() => match ev {
                 Some(Ok(Event::Key(key))) => app.on_key(key),
+                Some(Ok(Event::Paste(text))) => app.on_paste(&text),
                 Some(Ok(Event::Mouse(mouse))) => {
+                    redraw = mouse_needs_redraw(mouse.kind);
                     let rects = layout::frame_rects(area, app);
                     let target = layout::hit(&rects, app, mouse.column, mouse.row);
                     app.on_mouse(mouse, Instant::now(), |_, _| target)
@@ -354,6 +418,7 @@ mod tests {
     use super::super::app::Mode;
     use super::super::app::testkit::*;
     use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton};
 
     #[test]
     fn plan_boxes_always_ask_for_full() {
@@ -442,6 +507,195 @@ mod tests {
         assert_eq!(
             local_config(spec, serde_json::json!({ "list": "mine", "x": 1 })),
             serde_json::json!({ "list": "mine", "x": 1 })
+        );
+    }
+
+    type Slots = Vec<Option<mpsc::Sender<BoxCmd>>>;
+
+    fn four_slots() -> (Profile, Slots, [mpsc::Receiver<BoxCmd>; 2]) {
+        let mut profile = profile();
+        profile.boxes.push(spec("quad", "vikunja", None));
+        profile.boxes[0].id = "closed".into();
+        profile.boxes[0].title = "closed".into();
+        profile.boxes[1].title = "full".into();
+        profile.boxes[2].title = "gone".into();
+        profile.boxes[3].title = "live".into();
+        let (full, full_rx) = mpsc::channel(1);
+        full.try_send(BoxCmd::Refresh(View::Summary)).unwrap();
+        let (gone, gone_rx) = mpsc::channel(1);
+        drop(gone_rx);
+        let (live, live_rx) = mpsc::channel(1);
+        (
+            profile,
+            vec![None, Some(full), Some(gone), Some(live)],
+            [full_rx, live_rx],
+        )
+    }
+
+    fn runtime<'a>(profile: &'a Profile, cmds: Vec<Option<mpsc::Sender<BoxCmd>>>) -> Runtime<'a> {
+        Runtime {
+            profile,
+            words: capture::Words::new(&i18n::localizer(None), &Default::default()),
+            cmds,
+        }
+    }
+
+    #[test]
+    fn effects_reach_the_box_channel_or_flash() {
+        let (profile, cmds, mut keep) = four_slots();
+        let rt = runtime(&profile, cmds);
+        let mut app = App::new(&profile);
+        let done = |idx| Effect::Action {
+            idx,
+            item: "1".into(),
+            action: "done".into(),
+            args: serde_json::json!({}),
+        };
+        for (idx, text) in [
+            (0, "closed box is not open"),
+            (1, "full box is busy"),
+            (2, "the plugin task of the gone box stopped"),
+        ] {
+            assert!(!rt.exec(&mut app, done(idx)));
+            assert_eq!(app.flash.as_deref(), Some(text));
+            assert_eq!(app.boxes[idx].pending, 0, "box {idx}");
+            assert!(!rt.send(&mut app, idx, BoxCmd::Refresh(View::Full)));
+        }
+        app.flash = None;
+        assert!(rt.send(&mut app, 3, BoxCmd::Refresh(View::Full)));
+        assert_eq!(app.flash, None);
+        assert_eq!(app.boxes[3].pending, 1);
+        assert!(matches!(
+            keep[1].try_recv().unwrap(),
+            BoxCmd::Refresh(View::Full)
+        ));
+    }
+
+    #[test]
+    fn refresh_counts_as_pending_only_when_queued() {
+        let (profile, cmds, _keep) = four_slots();
+        let rt = runtime(&profile, cmds);
+        let mut app = App::new(&profile);
+        for idx in 0..3 {
+            rt.refresh(&mut app, idx);
+            assert_eq!(app.boxes[idx].pending, 0);
+        }
+        rt.refresh(&mut app, 3);
+        assert_eq!(app.boxes[3].pending, 1);
+    }
+
+    fn capture_app(profile: &Profile) -> App {
+        let mut app = App::new(profile);
+        app.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        app.on_paste("süt al");
+        app
+    }
+
+    fn submit(rt: &Runtime<'_>, app: &mut App) {
+        for effect in app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) {
+            rt.exec(app, effect);
+        }
+    }
+
+    #[test]
+    fn busy_box_keeps_the_capture_text() {
+        let mut profile = profile();
+        profile.capture_into = Some("full".into());
+        profile.boxes[1].id = "full".into();
+        let (_, cmds, _keep) = four_slots();
+        let rt = runtime(&profile, cmds);
+        let mut app = capture_app(&profile);
+        submit(&rt, &mut app);
+        assert_eq!(
+            app.mode,
+            Mode::Capture {
+                input: "süt al".into()
+            }
+        );
+        assert!(app.pending_capture.is_empty());
+        assert_eq!(app.flash.as_deref(), Some("redmine box is busy"));
+    }
+
+    #[test]
+    fn queued_capture_waits_for_the_result() {
+        let profile = profile();
+        let (tx, mut rx) = mpsc::channel(1);
+        let rt = runtime(&profile, vec![Some(tx), None, None]);
+        let mut app = capture_app(&profile);
+        submit(&rt, &mut app);
+        assert_eq!(app.mode, Mode::Board);
+        assert_eq!(app.pending_capture, [(0, "süt al".into())]);
+        assert_eq!(app.boxes[0].pending, 1);
+        match rx.try_recv().unwrap() {
+            BoxCmd::Drop {
+                item,
+                from,
+                capture,
+            } => {
+                assert_eq!((item.title.as_str(), from, capture), ("süt al", None, true));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn capture_without_a_target_or_with_a_parse_error_keeps_the_text() {
+        let mut profile = profile();
+        profile.capture_into = None;
+        let rt = runtime(&profile, vec![None, None, None]);
+        let mut app = capture_app(&profile);
+        submit(&rt, &mut app);
+        assert_eq!(
+            app.mode,
+            Mode::Capture {
+                input: "süt al".into()
+            }
+        );
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("the profile has no capture_into")
+        );
+
+        let profile = self::profile();
+        let rt = runtime(&profile, vec![None, None, None]);
+        let mut app = App::new(&profile);
+        app.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        app.on_paste("#urgent");
+        submit(&rt, &mut app);
+        assert_eq!(
+            app.mode,
+            Mode::Capture {
+                input: "#urgent".into()
+            }
+        );
+        assert!(
+            app.flash
+                .as_deref()
+                .unwrap()
+                .starts_with("could not add the note")
+        );
+    }
+
+    #[test]
+    fn moved_events_never_redraw() {
+        assert!(!mouse_needs_redraw(MouseEventKind::Moved));
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::ScrollDown,
+        ] {
+            assert!(mouse_needs_redraw(kind), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn refusing_an_unopenable_link_flashes_it() {
+        let mut app = loaded_app();
+        open_url(&mut app, "file:///etc/passwd");
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("cannot open this kind of link: file:///etc/passwd")
         );
     }
 }

@@ -249,6 +249,11 @@ impl Env {
     }
 
     fn run_with_profile(&self, args: &[&str], locale: &str, profile: Option<&str>) -> Ran {
+        let out = self.command(args, locale, profile).output().unwrap();
+        Ran { out }
+    }
+
+    fn command(&self, args: &[&str], locale: &str, profile: Option<&str>) -> Command {
         let root = self.dir.path();
         let path = format!(
             "{}:{}",
@@ -260,7 +265,7 @@ impl Env {
             Some(name) => command.env("FOCUSDECK_PROFILE", name),
             None => command.env_remove("FOCUSDECK_PROFILE"),
         };
-        let out = command
+        command
             .args(args)
             .env("PATH", path)
             .env_remove("FOCUSDECK_LANG")
@@ -269,11 +274,44 @@ impl Env {
             .env("LC_ALL", locale)
             .env("FOCUSDECK_CONFIG_DIR", root.join("config"))
             .env("FOCUSDECK_DATA_DIR", root.join("data"))
-            .env("FOCUSDECK_STATE_DIR", self.state_dir())
-            .output()
-            .unwrap();
-        Ran { out }
+            .env("FOCUSDECK_STATE_DIR", self.state_dir());
+        command
     }
+
+    fn queued(&self) -> Vec<Queued> {
+        let queue = self.queue();
+        let taken = queue.take().unwrap();
+        let items = taken.items.clone();
+        queue.commit(taken, &[]).unwrap();
+        items
+    }
+
+    fn wait_for_fake_log(&self, needle: &str) {
+        for _ in 0..200 {
+            if std::fs::read_to_string(self.fake_log()).is_ok_and(|log| log.contains(needle)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("the fake plugin never logged {needle:?}");
+    }
+
+    fn spawn_capture(&self, text: &str) -> std::process::Child {
+        self.command(&["capture", text], "C", Some("p"))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+}
+
+fn signal(child: &std::process::Child, name: &str) {
+    let status = Command::new("kill")
+        .arg(format!("-{name}"))
+        .arg(child.id().to_string())
+        .status()
+        .unwrap();
+    assert!(status.success());
 }
 
 const STANDARD_PROFILE: &str = r#"
@@ -296,9 +334,10 @@ fn capture_with_time_drops_and_notifies() {
     let drops = env.drops();
     assert_eq!(drops.len(), 1);
     assert_eq!(drops[0].title, "log at");
-    assert!(drops[0].due.is_some());
+    let due = drops[0].due.unwrap();
+    assert_eq!(due.format("%H:%M:%S").to_string(), "14:30:00");
     assert_eq!(env.notifications(), [["--", "added", "log at · 14:30"]]);
-    assert!(env.queue().take_all().unwrap().is_empty());
+    assert!(env.queued().is_empty());
 }
 
 #[test]
@@ -324,7 +363,7 @@ fn parse_error_is_critical_and_queues_nothing() {
         ]]
     );
     assert!(env.drops().is_empty());
-    assert!(env.queue().take_all().unwrap().is_empty());
+    assert!(env.queued().is_empty());
 }
 
 #[test]
@@ -333,7 +372,7 @@ fn crashing_plugin_queues_the_note() {
     env.set_mode("crash");
     let ran = env.run(&["capture", "log at"]);
     assert_eq!(ran.code(), 1);
-    let queued = env.queue().take_all().unwrap();
+    let queued = env.queued();
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].text, "log at");
     assert_eq!(queued[0].lang.as_deref(), Some("en"));
@@ -347,7 +386,31 @@ fn missing_plugin_binary_queues_the_note() {
     let env = Env::standard();
     std::fs::remove_file(env.dir.path().join("data/plugins/vikunja")).unwrap();
     assert_eq!(env.run(&["capture", "log at"]).code(), 1);
-    assert_eq!(env.queue().take_all().unwrap().len(), 1);
+    assert_eq!(env.queued().len(), 1);
+}
+
+#[test]
+fn unusable_state_dir_still_delivers_the_note() {
+    let env = Env::standard();
+    std::fs::write(env.state_dir(), "").unwrap();
+    let ran = env.run(&["capture", "log at"]);
+    assert_eq!(ran.code(), 0, "{}", ran.stderr());
+    assert_eq!(env.drops().len(), 1);
+    assert_eq!(env.notifications(), [["--", "added", "log at"]]);
+}
+
+#[test]
+fn unusable_state_dir_and_a_crashing_plugin_report_the_loss() {
+    let env = Env::standard();
+    std::fs::write(env.state_dir(), "").unwrap();
+    env.set_mode("crash");
+    assert_eq!(env.run(&["capture", "log at"]).code(), 1);
+    let notes = env.notifications();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(
+        notes[0][..4],
+        ["-u", "critical", "--", "focusdeck: note may be lost"]
+    );
 }
 
 #[test]
@@ -384,11 +447,11 @@ fn queued_note_keeps_its_original_time() {
 fn queued_note_parses_in_its_own_language() {
     let env = Env::standard();
     env.queue()
-        .put_back(&[Queued {
+        .push_entry(&Queued {
             text: "ara yarın 10:00".into(),
             at: at("2026-11-11T10:00:00+03:00"),
             lang: Some("tr".into()),
-        }])
+        })
         .unwrap();
     let ran = env.run(&["capture", "yeni"]);
     assert_eq!(ran.code(), 0, "{}", ran.stderr());
@@ -406,13 +469,93 @@ fn failed_flush_keeps_queue_and_new_note() {
     env.set_mode("crash");
     assert_eq!(env.run(&["capture", "yeni"]).code(), 1);
     let texts: Vec<_> = env
-        .queue()
-        .take_all()
-        .unwrap()
+        .queued()
         .into_iter()
         .map(|Queued { text, .. }| text)
         .collect();
     assert_eq!(texts, ["eski", "yeni"]);
+}
+
+#[test]
+fn unparsable_queued_note_is_not_counted_as_sent() {
+    let env = Env::standard();
+    let q = env.queue();
+    for (text, when) in [
+        ("@ali 14:30", "2026-11-11T10:00:00+03:00"),
+        ("eski", "2026-11-11T10:01:00+03:00"),
+    ] {
+        q.push_entry(&Queued {
+            text: text.into(),
+            at: at(when),
+            lang: Some("en".into()),
+        })
+        .unwrap();
+    }
+    assert_eq!(env.run(&["capture", "yeni"]).code(), 0);
+    let titles: Vec<_> = env.drops().into_iter().map(|i| i.title).collect();
+    assert_eq!(titles, ["eski", "yeni"]);
+    let raw = std::fs::read_to_string(env.notify_log()).unwrap();
+    assert!(
+        raw.contains("added\tyeni\n1 note sent from the queue\t"),
+        "{raw}"
+    );
+}
+
+#[test]
+fn partial_flush_requeues_only_the_unsent_notes() {
+    let env = Env::standard();
+    let q = env.queue();
+    q.push("bir", at("2026-11-11T10:00:00+03:00")).unwrap();
+    q.push("iki", at("2026-11-11T10:01:00+03:00")).unwrap();
+    env.set_mode("crash-on:iki");
+    assert_eq!(env.run(&["capture", "yeni"]).code(), 1);
+    let sent: Vec<_> = env.drops().into_iter().map(|i| i.title).collect();
+    assert_eq!(sent, ["bir"]);
+    let left: Vec<_> = env.queued().into_iter().map(|q| q.text).collect();
+    assert_eq!(left, ["iki", "yeni"]);
+}
+
+#[test]
+fn sigterm_during_delivery_keeps_every_note() {
+    let env = Env::standard();
+    env.set_mode("slow-drop");
+    let mut child = env.spawn_capture("log at");
+    env.wait_for_fake_log("waiting log at");
+    signal(&child, "TERM");
+    assert_eq!(child.wait().unwrap().code(), Some(1));
+    assert_eq!(
+        env.notifications(),
+        [[
+            "-u",
+            "critical",
+            "--",
+            "focusdeck: queued",
+            "interrupted before the note was sent"
+        ]]
+    );
+    let raw = std::fs::read_to_string(env.state_dir().join("capture-queue.jsonl")).unwrap();
+    assert_eq!(raw.lines().count(), 1, "{raw}");
+    assert!(raw.contains("\"text\":\"log at\""), "{raw}");
+
+    env.set_mode("ok");
+    assert_eq!(env.run(&["capture", "sonra"]).code(), 0);
+    let titles: Vec<_> = env.drops().into_iter().map(|i| i.title).collect();
+    assert_eq!(titles, ["log at", "sonra"]);
+}
+
+#[test]
+fn sigkill_during_delivery_loses_nothing() {
+    let env = Env::standard();
+    env.set_mode("slow-drop");
+    let mut child = env.spawn_capture("log at");
+    env.wait_for_fake_log("waiting log at");
+    signal(&child, "KILL");
+    assert_eq!(child.wait().unwrap().code(), None);
+
+    env.set_mode("ok");
+    assert_eq!(env.run(&["capture", "sonra"]).code(), 0);
+    let titles: Vec<_> = env.drops().into_iter().map(|i| i.title).collect();
+    assert_eq!(titles, ["log at", "sonra"]);
 }
 
 #[test]
@@ -570,10 +713,134 @@ col = 1
     let ran = env.run(&["remind"]);
     assert_eq!(ran.code(), 0, "{}", ran.stderr());
     assert!(ran.stdout().ends_with("  toplantı\n"));
+}
 
-    env.set_mode("crash");
-    env.set_reminders(&[]);
-    assert_eq!(env.run(&["remind"]).code(), 0);
+#[test]
+fn remind_logs_a_failing_box_and_still_shows_the_others() {
+    let env = Env::new(
+        r#"
+name = "p"
+
+[[box]]
+id = "a"
+title = "A"
+plugin = "broken"
+row = 0
+col = 0
+
+[[box]]
+id = "b"
+title = "B"
+plugin = "vikunja"
+row = 0
+col = 1
+"#,
+    );
+    let root = env.dir.path();
+    env.script(
+        &root.join("data/plugins/broken"),
+        &format!(
+            "FAKE_MODE=fail-reminders FAKE_REMINDERS_FILE='{}' exec '{}'",
+            root.join("reminders.json").display(),
+            fake_plugin().display()
+        ),
+    );
+    env.set_reminders(&[Reminder {
+        at: Local::now().fixed_offset() - Duration::minutes(1),
+        item: item("5", "toplantı"),
+    }]);
+    let ran = env.run(&["remind"]);
+    assert_eq!(ran.code(), 0, "{}", ran.stderr());
+    assert!(ran.stdout().ends_with("  toplantı\n"), "{}", ran.stdout());
+    let log = std::fs::read_to_string(env.state_dir().join("focusdeck.log")).unwrap();
+    assert!(log.contains("a: could not fetch reminders: "), "{log}");
+}
+
+#[test]
+fn remind_output_is_sorted_by_time_across_boxes() {
+    let env = Env::new(
+        r#"
+name = "p"
+
+[[box]]
+id = "a"
+title = "A"
+plugin = "late"
+row = 0
+col = 0
+
+[[box]]
+id = "b"
+title = "B"
+plugin = "vikunja"
+row = 0
+col = 1
+"#,
+    );
+    let root = env.dir.path();
+    let now = Local::now().fixed_offset();
+    std::fs::write(
+        root.join("late.json"),
+        serde_json::to_string(&[Reminder {
+            at: now - Duration::minutes(1),
+            item: item("1", "geç"),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    env.script(
+        &root.join("data/plugins/late"),
+        &format!(
+            "FAKE_REMINDERS_FILE='{}' exec '{}'",
+            root.join("late.json").display(),
+            fake_plugin().display()
+        ),
+    );
+    env.set_reminders(&[Reminder {
+        at: now - Duration::minutes(30),
+        item: item("2", "erken"),
+    }]);
+    let ran = env.run(&["remind"]);
+    let titles: Vec<_> = ran
+        .stdout()
+        .lines()
+        .map(|l| l.split("  ").nth(1).unwrap().to_owned())
+        .collect();
+    assert_eq!(titles, ["erken", "geç"]);
+}
+
+#[test]
+fn concurrent_remind_runs_notify_once() {
+    let env = Env::standard();
+    let root = env.dir.path();
+    env.script(
+        &root.join("bin/notify-send"),
+        &format!(
+            "sleep 0.3\nfor a in \"$@\"; do printf '%s\\t' \"$a\"; done >> '{0}'\necho >> '{0}'",
+            env.notify_log().display()
+        ),
+    );
+    env.set_reminders(&[Reminder {
+        at: Local::now().fixed_offset() - Duration::minutes(1),
+        item: item("5", "toplantı"),
+    }]);
+    let children: Vec<_> = (0..4)
+        .map(|_| {
+            env.command(&["remind", "--send"], "C", Some("p"))
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for mut child in children {
+        assert!(child.wait().unwrap().success());
+    }
+    assert_eq!(env.notifications().len(), 1);
+    assert_eq!(
+        State::load(&env.state_dir().join("reminded.json")).0.len(),
+        1
+    );
 }
 
 #[test]
