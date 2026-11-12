@@ -8,3 +8,4 @@ items =
        *[other] { $count } items
     }
 capture-words-tomorrow = Tomorrow tomorrow
+term-ref = English term

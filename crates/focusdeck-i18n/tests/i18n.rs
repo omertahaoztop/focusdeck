@@ -81,7 +81,14 @@ fn words_split_and_lowercase() {
 fn broken_file_keeps_valid_messages() {
     let loc = Localizer::new(Some("broken"), SOURCES);
     assert_eq!(loc.t("good"), "Broken good");
+    assert_eq!(loc.t("hello"), "Broken hello");
     assert_eq!(loc.t("bad"), "English bad");
+}
+
+#[test]
+fn message_with_resolver_errors_falls_back_to_next_language() {
+    let loc = Localizer::new(Some("tr"), SOURCES);
+    assert_eq!(loc.t("term-ref"), "English term");
 }
 
 fn write_locales(dir: &std::path::Path, files: &[(&str, &str)]) {
@@ -129,9 +136,19 @@ fn check_locales_reports_missing_extra_variable_and_syntax() {
         ],
     );
     let err = check_locales(dir.path()).unwrap_err();
-    assert!(err.contains("missing.ftl") && err.contains("`b`"), "{err}");
-    assert!(err.contains("extra.ftl") && err.contains("`z`"), "{err}");
-    assert!(err.contains("vars.ftl") && err.contains("`b`"), "{err}");
-    assert!(err.contains("vars.ftl") && err.contains("`c`"), "{err}");
-    assert!(err.contains("syntax.ftl:2"), "{err}");
+    let lines: Vec<&str> = err.lines().collect();
+    for expected in [
+        "missing.ftl: missing message `b`",
+        "extra.ftl: extra message `z`",
+        "vars.ftl: message `b` variables {count} differ from en.ftl {n}",
+        "vars.ftl: message `c` variables {} differ from en.ftl {who}",
+    ] {
+        assert!(lines.contains(&expected), "{expected:?} not in:\n{err}");
+    }
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("syntax.ftl:2: syntax error")),
+        "{err}"
+    );
 }

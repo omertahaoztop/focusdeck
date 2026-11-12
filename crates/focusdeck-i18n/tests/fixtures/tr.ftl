@@ -5,3 +5,4 @@ items =
        *[other] { $count } öğe
     }
 capture-words-tomorrow = Yarın yarin
+term-ref = { -nope }

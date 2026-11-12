@@ -123,16 +123,21 @@ impl Localizer {
     }
 
     fn format(&self, id: &str, args: Option<&FluentArgs<'_>>) -> String {
+        let mut last_resort = None;
         for (_, bundle) in &self.chain {
             let Some(pattern) = bundle.get_message(id).and_then(|m| m.value()) else {
                 continue;
             };
             let mut errors = Vec::new();
-            return bundle
+            let text = bundle
                 .format_pattern(pattern, args, &mut errors)
                 .into_owned();
+            if errors.is_empty() {
+                return text;
+            }
+            last_resort = Some(text);
         }
-        id.to_owned()
+        last_resort.unwrap_or_else(|| id.to_owned())
     }
 }
 
