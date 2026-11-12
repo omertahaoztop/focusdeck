@@ -43,7 +43,7 @@ Plugin'ler `~/.local/share/focusdeck/plugins/<ad>` altına yazılır. `install` 
 
 ## Hızlı başlangıç
 
-`cargo install` sonrası `focusdeck` çalıştır. Profil seçilmemişse (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`) ve `~/.config/focusdeck/profiles/` boşsa `profiles/notes.toml` dosyasını tek kutuyla ("Notlar" başlıklı, arayüz dilinde) oluşturur ve açar. `a` tuşuna basıp bir satır yazmak not almaya yeter. `config.toml` yazılmaz.
+`cargo install` sonrası `focusdeck` çalıştır. Profil seçilmemişse (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`) ve `~/.config/focusdeck/profiles/` boşsa focusdeck `profiles/notes.toml` dosyasını tek kutuyla ("Notlar" başlıklı, arayüz dilinde) oluşturup açar. `a` tuşuna basıp bir satır yazmak not almaya yeter. `config.toml` yazılmaz.
 
 `profiles/` içinde tek profil varsa focusdeck sormadan onu açar. Birden çok profil var ve seçim yapılmamışsa hata verip çıkar. [Profil](#profil) bölümündeki gibi birini seç.
 
