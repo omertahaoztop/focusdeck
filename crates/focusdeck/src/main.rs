@@ -26,6 +26,7 @@ fn main() -> ExitCode {
             }
         };
     }
+    clear_stale_lock();
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(e) => {
@@ -34,6 +35,11 @@ fn main() -> ExitCode {
         }
     };
     runtime.block_on(async_main())
+}
+
+fn clear_stale_lock() {
+    let path = std::env::temp_dir().join("focusdeck.lock");
+    let _ = std::fs::remove_file(path);
 }
 
 async fn async_main() -> ExitCode {
