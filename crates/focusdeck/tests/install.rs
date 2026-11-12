@@ -273,6 +273,73 @@ async fn unreachable_registry_is_skipped() {
 }
 
 #[tokio::test]
+async fn unreachable_first_registry_falls_through() {
+    let reg = tempfile::tempdir().unwrap();
+    let plugins = tempfile::tempdir().unwrap();
+    let missing = reg_url(&reg.path().join("yok"));
+    let good = tempfile::tempdir().unwrap();
+    let second = good_registry(good.path());
+    install::install(&[missing, second.clone()], "redmine", plugins.path())
+        .await
+        .unwrap();
+    let manifest: toml::Table =
+        toml::from_str(&std::fs::read_to_string(plugins.path().join("redmine.toml")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["registry"].as_str(), Some(second.as_str()));
+}
+
+#[tokio::test]
+async fn first_registry_wins_and_the_second_is_not_asked() {
+    let first = tempfile::tempdir().unwrap();
+    let plugins = tempfile::tempdir().unwrap();
+    let mut server = mockito::Server::new_async().await;
+    let asked = server
+        .mock("GET", "/index.toml")
+        .expect(0)
+        .create_async()
+        .await;
+    install::install(
+        &[
+            good_registry(first.path()),
+            format!("{}/index.toml", server.url()),
+        ],
+        "redmine",
+        plugins.path(),
+    )
+    .await
+    .unwrap();
+    asked.assert_async().await;
+}
+
+#[test]
+fn verify_installed_checks_the_recorded_hash() {
+    let plugins = tempfile::tempdir().unwrap();
+    let dir = plugins.path();
+    std::fs::write(dir.join("redmine"), BIN).unwrap();
+    install::verify_installed(dir, "redmine").unwrap();
+    let changed =
+        "redmine no longer matches its manifest; run \"focusdeck plugin install redmine\" again";
+    for manifest in [
+        "not toml = [".to_owned(),
+        "version = \"0.1.0\"\n".to_owned(),
+        format!("sha256 = \"{}\"\n", "0".repeat(64)),
+    ] {
+        std::fs::write(dir.join("redmine.toml"), manifest).unwrap();
+        let err = install::verify_installed(dir, "redmine").unwrap_err();
+        assert_eq!(err.to_string(), changed);
+    }
+    std::fs::write(
+        dir.join("redmine.toml"),
+        format!("sha256 = \"{}\"\n", sha256_hex(BIN).to_uppercase()),
+    )
+    .unwrap();
+    install::verify_installed(dir, "redmine").unwrap();
+    std::fs::remove_file(dir.join("redmine")).unwrap();
+    let err = install::verify_installed(dir, "redmine").unwrap_err();
+    assert_eq!(err.to_string(), changed);
+}
+
+#[tokio::test]
 async fn unknown_plugin_error() {
     let reg = tempfile::tempdir().unwrap();
     let plugins = tempfile::tempdir().unwrap();
