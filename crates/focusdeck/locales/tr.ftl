@@ -123,6 +123,7 @@ profile-empty-box = { $id } kutusunun width ve height değeri en az 1 olmalı
 profile-overlapping-cells = { $first } ve { $second } kutuları aynı hücrede: satır { $row } sütun { $col }
 profile-no-profile = profil seçilmedi: --profile ver ya da config.toml'a default_profile yaz
 profile-invalid-name = geçersiz profil adı: { $name }
+profile-create-failed = { $path } oluşturulamadı: { $error }
 
 install-invalid-name = geçersiz plugin adı: { $name }
 install-checksum-mismatch = sağlama tutmadı
@@ -185,3 +186,5 @@ local-invalid-settings = yerel kutu ayarı geçersiz: { $error }
 local-item-missing = { $id } notu bu kutuda yok
 local-position-required = sıra numarası gerekli
 local-unknown-action = bilinmeyen eylem: { $action }
+
+starter-title = Notlar

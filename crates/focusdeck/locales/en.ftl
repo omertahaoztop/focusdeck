@@ -123,6 +123,7 @@ profile-empty-box = width and height of box { $id } must be at least 1
 profile-overlapping-cells = boxes { $first } and { $second } share a cell: row { $row } column { $col }
 profile-no-profile = no profile selected: pass --profile or set default_profile in config.toml
 profile-invalid-name = invalid profile name: { $name }
+profile-create-failed = could not create { $path }: { $error }
 
 install-invalid-name = invalid plugin name: { $name }
 install-checksum-mismatch = checksum mismatch
@@ -189,3 +190,5 @@ local-invalid-settings = invalid local box settings: { $error }
 local-item-missing = note { $id } is not in this box
 local-position-required = a position is required
 local-unknown-action = unknown action: { $action }
+
+starter-title = Notes

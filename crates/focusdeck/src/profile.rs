@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::duration;
 use crate::i18n::{self, msg};
+use crate::paths::Paths;
 use focusdeck_i18n::Localizer;
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
@@ -80,6 +81,10 @@ pub enum ProfileError {
     },
     NoProfileSelected,
     InvalidName(String),
+    Create {
+        path: PathBuf,
+        source: std::io::Error,
+    },
 }
 
 impl ProfileError {
@@ -147,6 +152,13 @@ impl ProfileError {
                 msg::PROFILE_INVALID_NAME,
                 &[("name", format!("{name:?}").as_str().into())],
             ),
+            ProfileError::Create { path, source } => l.t_args(
+                msg::PROFILE_CREATE_FAILED,
+                &[
+                    ("path", path.display().to_string().as_str().into()),
+                    ("error", source.to_string().as_str().into()),
+                ],
+            ),
         }
     }
 }
@@ -162,6 +174,7 @@ impl std::error::Error for ProfileError {
         match self {
             ProfileError::Read { source, .. } => Some(source),
             ProfileError::Parse { source, .. } => Some(source),
+            ProfileError::Create { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -269,6 +282,83 @@ pub fn select_name(
     }
     Ok(name.to_string())
 }
+
+pub fn resolve_name(
+    paths: &Paths,
+    cli: Option<&str>,
+    env: Option<&str>,
+    cfg: &Config,
+) -> Result<String, ProfileError> {
+    match select_name(cli, env, cfg) {
+        Err(ProfileError::NoProfileSelected) => {}
+        selected => return selected,
+    }
+    let mut names = existing_names(&paths.config_dir.join("profiles"))?;
+    match names.len() {
+        0 => create_starter(paths),
+        1 => Ok(names.remove(0)),
+        _ => Err(ProfileError::NoProfileSelected),
+    }
+}
+
+fn existing_names(dir: &Path) -> Result<Vec<String>, ProfileError> {
+    let read_error = |source| ProfileError::Read {
+        path: dir.to_path_buf(),
+        source,
+    };
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(read_error(e)),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(read_error)?.path();
+        if path.extension().is_some_and(|ext| ext == "toml")
+            && path.is_file()
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            && !stem.starts_with('.')
+        {
+            names.push(stem.to_string());
+        }
+    }
+    Ok(names)
+}
+
+fn create_starter(paths: &Paths) -> Result<String, ProfileError> {
+    const NAME: &str = "notes";
+    let path = paths.profile_path(NAME);
+    let create_error = |source| ProfileError::Create {
+        path: path.clone(),
+        source,
+    };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(create_error)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path);
+    match file {
+        Ok(mut file) => {
+            use std::io::Write;
+            file.write_all(starter_profile(&i18n::t(msg::STARTER_TITLE)).as_bytes())
+                .map_err(create_error)?;
+        }
+        // another focusdeck won the race to the same file
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(create_error(e)),
+    }
+    Ok(NAME.to_string())
+}
+
+pub fn starter_profile(title: &str) -> String {
+    let title = toml::Value::String(title.to_string());
+    format!(
+        "name = {title}\ncapture_into = \"notes\"\n\n[[box]]\nid = \"notes\"\ntitle = {title}\nplugin = \"local\"\nrow = 0\ncol = 0\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +561,124 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
         );
     }
 
+    fn paths_in(dir: &tempfile::TempDir) -> Paths {
+        Paths {
+            config_dir: dir.path().join("config"),
+            data_dir: dir.path().join("data"),
+            state_dir: dir.path().join("state"),
+        }
+    }
+
+    fn profile_files(paths: &Paths) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(paths.config_dir.join("profiles"))
+            .map(|rd| {
+                rd.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    fn write_profile(paths: &Paths, file: &str) {
+        let dir = paths.config_dir.join("profiles");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(file), "name = \"x\"\n").unwrap();
+    }
+
+    #[test]
+    fn resolve_name_explicit_name_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(&dir);
+        assert_eq!(
+            resolve_name(&paths, Some("ev"), None, &cfg(None)).unwrap(),
+            "ev"
+        );
+        assert!(profile_files(&paths).is_empty());
+        assert!(!paths.config_dir.exists());
+        assert!(matches!(
+            resolve_name(&paths, Some("a/b"), None, &cfg(None)).unwrap_err(),
+            ProfileError::InvalidName(_)
+        ));
+    }
+
+    #[test]
+    fn resolve_name_single_profile_is_used_without_creating_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(&dir);
+        write_profile(&paths, "is.toml");
+        write_profile(&paths, ".gizli.toml");
+        write_profile(&paths, "notlar.txt");
+        assert_eq!(resolve_name(&paths, None, None, &cfg(None)).unwrap(), "is");
+        assert_eq!(
+            profile_files(&paths),
+            [".gizli.toml", "is.toml", "notlar.txt"]
+        );
+    }
+
+    #[test]
+    fn resolve_name_without_profiles_writes_the_starter() {
+        for create_dir in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = paths_in(&dir);
+            if create_dir {
+                std::fs::create_dir_all(paths.config_dir.join("profiles")).unwrap();
+            }
+            assert_eq!(
+                resolve_name(&paths, None, None, &cfg(None)).unwrap(),
+                "notes"
+            );
+            assert_eq!(profile_files(&paths), ["notes.toml"]);
+            let p = load(&paths.profile_path("notes")).unwrap();
+            assert_eq!(p.boxes[0].title, "Notes");
+            assert!(!paths.config_dir.join("config.toml").exists());
+            assert_eq!(
+                resolve_name(&paths, None, None, &cfg(None)).unwrap(),
+                "notes"
+            );
+            assert_eq!(profile_files(&paths), ["notes.toml"]);
+        }
+    }
+
+    #[test]
+    fn resolve_name_with_several_profiles_still_needs_a_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(&dir);
+        write_profile(&paths, "is.toml");
+        write_profile(&paths, "ev.toml");
+        assert!(matches!(
+            resolve_name(&paths, None, None, &cfg(None)).unwrap_err(),
+            ProfileError::NoProfileSelected
+        ));
+        assert_eq!(profile_files(&paths), ["ev.toml", "is.toml"]);
+    }
+
+    #[test]
+    fn starter_profile_loads_as_a_local_notes_box() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.toml");
+        std::fs::write(&path, starter_profile("Notlar")).unwrap();
+        let p = load(&path).unwrap();
+        assert_eq!(p.name, "Notlar");
+        assert_eq!(p.capture_into.as_deref(), Some("notes"));
+        assert_eq!(p.boxes.len(), 1);
+        let b = &p.boxes[0];
+        assert_eq!((b.id.as_str(), b.title.as_str()), ("notes", "Notlar"));
+        assert_eq!(b.plugin, "local");
+        assert_eq!((b.row, b.col), (0, 0));
+    }
+
+    #[test]
+    fn starter_profile_escapes_the_title() {
+        let title = "a \"b\" \\ c\nd";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.toml");
+        std::fs::write(&path, starter_profile(title)).unwrap();
+        let p = load(&path).unwrap();
+        assert_eq!(p.name, title);
+        assert_eq!(p.boxes[0].title, title);
+    }
+
     #[test]
     fn tr_error_texts_unchanged() {
         let tr = i18n::localizer(Some("tr"));
@@ -519,6 +727,13 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
             (
                 ProfileError::InvalidName("a/b".into()),
                 "geçersiz profil adı: \"a/b\"",
+            ),
+            (
+                ProfileError::Create {
+                    path: "/p/notes.toml".into(),
+                    source: std::io::Error::other("izin yok"),
+                },
+                "/p/notes.toml oluşturulamadı: izin yok",
             ),
         ];
         for (error, text) in cases {

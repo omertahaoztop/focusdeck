@@ -102,7 +102,7 @@ fn load_profile(flag: Option<&str>) -> anyhow::Result<(Paths, Config, Profile)> 
     let paths = Paths::from_env();
     let config = Config::load(&paths)?;
     let env_profile = std::env::var("FOCUSDECK_PROFILE").ok();
-    let name = profile::select_name(flag, env_profile.as_deref(), &config)?;
+    let name = profile::resolve_name(&paths, flag, env_profile.as_deref(), &config)?;
     let profile = profile::load(&paths.profile_path(&name))?;
     Ok((paths, config, profile))
 }

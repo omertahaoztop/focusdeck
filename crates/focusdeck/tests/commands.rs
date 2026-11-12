@@ -136,14 +136,20 @@ impl Ran {
 
 impl Env {
     fn new(profile_body: &str) -> Env {
+        let env = Env::without_profiles();
+        let root = env.dir.path();
+        std::fs::create_dir_all(root.join("config/profiles")).unwrap();
+        std::fs::write(root.join("config/profiles/p.toml"), profile_body).unwrap();
+        env
+    }
+
+    fn without_profiles() -> Env {
         let env = Env {
             dir: tempfile::tempdir().unwrap(),
         };
         let root = env.dir.path();
-        std::fs::create_dir_all(root.join("config/profiles")).unwrap();
         std::fs::create_dir_all(root.join("data/plugins")).unwrap();
         std::fs::create_dir_all(root.join("bin")).unwrap();
-        std::fs::write(root.join("config/profiles/p.toml"), profile_body).unwrap();
         env.script(
             &root.join("bin/notify-send"),
             &format!(
@@ -239,20 +245,28 @@ impl Env {
     }
 
     fn run_in(&self, args: &[&str], locale: &str) -> Ran {
+        self.run_with_profile(args, locale, Some("p"))
+    }
+
+    fn run_with_profile(&self, args: &[&str], locale: &str, profile: Option<&str>) -> Ran {
         let root = self.dir.path();
         let path = format!(
             "{}:{}",
             root.join("bin").display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        let out = Command::new(env!("CARGO_BIN_EXE_focusdeck"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_focusdeck"));
+        match profile {
+            Some(name) => command.env("FOCUSDECK_PROFILE", name),
+            None => command.env_remove("FOCUSDECK_PROFILE"),
+        };
+        let out = command
             .args(args)
             .env("PATH", path)
             .env_remove("FOCUSDECK_LANG")
             .env_remove("LANG")
             .env_remove("LC_MESSAGES")
             .env("LC_ALL", locale)
-            .env("FOCUSDECK_PROFILE", "p")
             .env("FOCUSDECK_CONFIG_DIR", root.join("config"))
             .env("FOCUSDECK_DATA_DIR", root.join("data"))
             .env("FOCUSDECK_STATE_DIR", self.state_dir())
@@ -703,4 +717,35 @@ fn serve_local_is_hidden_from_help() {
     let help = env.run(&["--help"]).stdout();
     assert!(help.contains("Focus board"), "{help}");
     assert!(!help.contains("serve-local"), "{help}");
+}
+
+#[test]
+fn first_capture_creates_the_starter_profile() {
+    let env = Env::without_profiles();
+    let ran = env.run_with_profile(&["capture", "ilk not"], "tr_TR.UTF-8", None);
+    assert_eq!(ran.code(), 0, "{}", ran.stderr());
+    let root = env.dir.path();
+    let profile = std::fs::read_to_string(root.join("config/profiles/notes.toml")).unwrap();
+    assert!(profile.contains("Notlar"), "{profile}");
+    let notes = local_notes(&env);
+    assert_eq!(notes["items"][0]["title"], "ilk not");
+    assert!(!root.join("config/config.toml").exists());
+}
+
+#[test]
+fn two_profiles_without_a_choice_still_error() {
+    let env = Env::without_profiles();
+    let profiles = env.dir.path().join("config/profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    for name in ["is", "ev"] {
+        std::fs::write(profiles.join(format!("{name}.toml")), STANDARD_PROFILE).unwrap();
+    }
+    let ran = env.run_with_profile(&["capture", "x"], "C", None);
+    assert_eq!(ran.code(), 1);
+    assert!(
+        ran.stderr().contains("no profile selected"),
+        "{}",
+        ran.stderr()
+    );
+    assert!(!profiles.join("notes.toml").exists());
 }
