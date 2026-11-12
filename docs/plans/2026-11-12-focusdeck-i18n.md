@@ -175,8 +175,8 @@
 
 **Interfaces:** yok.
 
-- [ ] **Step 1: Anonimleştir.** Değişimler: `destek.mono.tr` → `redmine.example.com`, `chat.mono.tr` → `zulip.example.com`, `vikunja.omertahaoztop.tr` → `vikunja.example.com`, iş e-postası → `user@example.com`, `"Mono"` proje → `"Home"`, `"Mono Fikirler"` → `"Home Ideas"`, `TÜYAP`/`Tüyap`/`tüyap` → `Depo`, `45539` → `12345`, plan belgelerindeki Vikunja proje/görünüm/sütun kimlikleri → `1`, `2`, `3`… Tasarım belgesinin "Anonimleştirme" bölümü değiştirilen değerleri adıyla saymaz, "iş alan adları, proje adı, müşteri adı, iş numarası" diye genel yazar.
-- [ ] **Step 2: Doğrula.** `git grep -n -i -E 'mono\.tr|mono\.net|monocloud|\bmono\b|45539|tüyap|taha\.oztop|omertahaoztop\.tr' -- . ':!Cargo.lock'` sonuç vermez. `cargo test --workspace` geçer.
+- [ ] **Step 1: Anonimleştir.** Değişimler: iş alan adları → `redmine.example.com`, `zulip.example.com`, `vikunja.example.com`; iş e-postası → `user@example.com`; iş proje adı → `"Home"`, onun fikir projesi → `"Home Ideas"`; müşteri adı → `Depo`; iş numarası → `12345`; plan belgelerindeki Vikunja proje/görünüm/sütun kimlikleri → `1`, `2`, `3`… Tasarım belgesinin "Anonimleştirme" bölümü değiştirilen değerleri adıyla saymaz, "iş alan adları, proje adı, müşteri adı, iş numarası" diye genel yazar.
+- [ ] **Step 2: Doğrula.** Eski iş değerlerini arayan yerel `git grep` (kalıp listesi depoya yazılmaz) `Cargo.lock` dışında sonuç vermez. `cargo test --workspace` geçer.
 - [ ] **Step 3: README.** İki README'ye (aynı içerik, kendi dilinde): Settings'e `language` ve `[capture_words]` (anahtarlar ve örnek), "cron/timer/kısayol `LANG` taşımayabilir, `language` yaz" notu; capture bölümünde dile göre kelimeler (en ve tr listesi); protokol bölümüne "plugin istenen dili `FOCUSDECK_LANG` ile alır"; yeni "Translating" / "Çeviri" bölümü: `crates/focusdeck/locales/<kod>.ftl` ekle, `en.ftl` temel, `cargo test` eksik ya da fazla kimliği söyler, `capture-words-*` biçimi, plugin çevirileri plugins reposunda. Kurulum ve protokol örneklerindeki etiket `v0.2.0`. Ekran görüntüsü bağlantıları `docs/screenshots/en/` (README.md) ve `docs/screenshots/tr/` (README.tr.md) altındaki `board.png`, `zoom.png`, `move.png`, `help.png` dosyalarını gösterir; görüntüleri kontrolcü sonra ekler.
 - [ ] **Step 4:** `cargo test --workspace` ve clippy temiz.
 - [ ] **Step 5: Commit** `Anonymize examples and document languages`
@@ -191,7 +191,7 @@
 - Consumes: Task 1 (`focusdeck-i18n = { path = "../../../focusdeck/crates/focusdeck-i18n" }`, dependency ve build-dependency).
 - Produces: plugin başına `i18n` modülü; `main` ilk iş `i18n::init(focusdeck_i18n::requested(None, |k| std::env::var(k).ok(), &focusdeck_i18n::PLUGIN_ENV))`.
 
-- [ ] **Step 1: Testleri yaz/güncelle.** Kullanıcıya görünen metin bekleyen testler İngilizce bekler. Yeniler: her plugin'de `locales_match_english`; redmine `late_subtitle_by_language`: `i18n::localizer(Some("tr"))` ile gecikme alt satırı `"3g gecikmiş"`, en ile `"3d overdue"`. Vikunja testlerindeki `Mono` → `Home`, `45539` → `12345`.
+- [ ] **Step 1: Testleri yaz/güncelle.** Kullanıcıya görünen metin bekleyen testler İngilizce bekler. Yeniler: her plugin'de `locales_match_english`; redmine `late_subtitle_by_language`: `i18n::localizer(Some("tr"))` ile gecikme alt satırı `"3g gecikmiş"`, en ile `"3d overdue"`. Vikunja testlerindeki iş proje adı → `Home`, iş numarası → `12345`.
 - [ ] **Step 2:** Testlerin düştüğünü gör.
 - [ ] **Step 3: Uygula.** Hata ve alt satır metinleri `t`/`t_args`'tan gelir. Vikunja'nın `kimden:` etiket öneki ve `focusdeck-source: ` satırı veri biçimidir, çevrilmez.
 - [ ] **Step 4:** `cargo test --workspace` ve clippy temiz.
@@ -209,7 +209,7 @@
 - [ ] **Step 1: Testleri yaz/güncelle.** Kullanıcıya görünen metin bekleyen testler İngilizce. Yeniler: her plugin'de `locales_match_english`; gmail `age_by_language`: tr `40dk`, `5s`, `4g`; en `40m`, `5h`, `4d`.
 - [ ] **Step 2:** Testlerin düştüğünü gör.
 - [ ] **Step 3: Uygula.** Zulip ve Gmail metinleri (gmail `login` çıktısı dahil) Fluent'ten. `focusdeck-index` metinleri İngilizce sabit olur, Fluent kullanmaz. Açıklamalar: vikunja `"Open tasks of a Vikunja project"`, redmine `"Open Redmine issues assigned to me"`, zulip `"Starred Zulip messages"`, gmail `"Starred Gmail messages"`. İki README'ye "Plugins speak the language focusdeck passes in `FOCUSDECK_LANG`; run directly they use `LC_ALL`/`LC_MESSAGES`/`LANG`" notu ve "Translating" / "Çeviri" bölümü (`plugins/<ad>/locales/<kod>.ftl`).
-- [ ] **Step 4:** `cargo test --workspace` ve clippy temiz; `git grep -n -i -E 'mono\.tr|\bmono\b|45539|tüyap'` sonuç vermez.
+- [ ] **Step 4:** `cargo test --workspace` ve clippy temiz; eski iş değerlerini arayan yerel `git grep` sonuç vermez.
 - [ ] **Step 5: Commit** `Translate Zulip and Gmail plugins and document languages`
 
 ---
