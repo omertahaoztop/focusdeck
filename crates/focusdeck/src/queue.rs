@@ -347,16 +347,16 @@ mod tests {
         let (dir, q) = queue();
         fs::write(aside(&dir, 2), line("yeni-kalan")).unwrap();
         fs::write(aside(&dir, 1), line("eski-kalan")).unwrap();
-        q.push("canli", at("2026-11-12T10:00:00+03:00")).unwrap();
-        assert_eq!(texts(&drain(&q)), ["eski-kalan", "yeni-kalan", "canli"]);
+        q.push("canlı", at("2026-11-12T10:00:00+03:00")).unwrap();
+        assert_eq!(texts(&drain(&q)), ["eski-kalan", "yeni-kalan", "canlı"]);
         assert_eq!(files(&dir), [format!("{FILE}.lock")]);
     }
 
     #[test]
     fn stale_aside_without_live_file_is_recovered() {
         let (dir, q) = queue();
-        fs::write(aside(&dir, 1), line("kaldi")).unwrap();
-        assert_eq!(texts(&drain(&q)), ["kaldi"]);
+        fs::write(aside(&dir, 1), line("kaldı")).unwrap();
+        assert_eq!(texts(&drain(&q)), ["kaldı"]);
         assert!(drain(&q).is_empty());
     }
 
@@ -374,10 +374,10 @@ mod tests {
         let (dir, q) = queue();
         // reading a directory fails after it was opened and locked like a file
         fs::create_dir(aside(&dir, 1)).unwrap();
-        q.push("canli", at("2026-11-12T10:00:00+03:00")).unwrap();
+        q.push("canlı", at("2026-11-12T10:00:00+03:00")).unwrap();
         q.take().err().expect("reading a directory fails");
         fs::remove_dir(aside(&dir, 1)).unwrap();
-        assert_eq!(texts(&drain(&q)), ["canli"]);
+        assert_eq!(texts(&drain(&q)), ["canlı"]);
     }
 
     #[test]
