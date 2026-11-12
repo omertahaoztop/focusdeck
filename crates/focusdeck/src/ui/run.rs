@@ -156,19 +156,16 @@ impl Runtime<'_> {
         }
     }
 
-    // a same-plugin drop moves the task out of its source box, so siblings must reload too
-    fn siblings_after_drop(&self, app: &App, ev: &BoxEvent) -> Vec<usize> {
+    // one server task can sit in several boxes of the same plugin, so every action reloads them all
+    fn siblings_after_finish(&self, app: &App, ev: &BoxEvent) -> Vec<usize> {
         let BoxEvent::Finished {
             idx,
-            what,
             result: Ok(()),
+            ..
         } = ev
         else {
             return Vec::new();
         };
-        if what != "drop" {
-            return Vec::new();
-        }
         let Some(plugin) = app.boxes.get(*idx).map(|b| b.spec.plugin.as_str()) else {
             return Vec::new();
         };
@@ -294,7 +291,7 @@ async fn event_loop(
                 None => return Ok(()),
             },
             Some(ev) = event_rx.recv() => {
-                extra_refresh = rt.siblings_after_drop(app, &ev);
+                extra_refresh = rt.siblings_after_finish(app, &ev);
                 app.on_event(ev)
             }
             Some(idx) = tick_rx.recv() => {
@@ -344,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_refreshes_same_plugin_siblings_only() {
+    fn finished_action_refreshes_same_plugin_siblings_only() {
         let mut profile = profile();
         profile.boxes[ZULIP].plugin = "vikunja".into();
         let app = App::new(&profile);
@@ -357,13 +354,11 @@ mod tests {
             what: what.into(),
             result,
         };
-        assert_eq!(rt.siblings_after_drop(&app, &done("drop", Ok(()))), [ZULIP]);
+        for what in ["drop", "done", "delete", "reorder", "move", "unstar"] {
+            assert_eq!(rt.siblings_after_finish(&app, &done(what, Ok(()))), [ZULIP]);
+        }
         assert!(
-            rt.siblings_after_drop(&app, &done("done", Ok(())))
-                .is_empty()
-        );
-        assert!(
-            rt.siblings_after_drop(&app, &done("drop", Err("x".into())))
+            rt.siblings_after_finish(&app, &done("drop", Err("x".into())))
                 .is_empty()
         );
     }
