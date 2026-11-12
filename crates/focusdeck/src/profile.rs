@@ -71,6 +71,12 @@ pub enum ProfileError {
     PlanIntoSelf(String),
     #[error("plan_into bilinmeyen kutuya bakıyor: {0}")]
     UnknownPlanInto(String),
+    #[error("{plugin} kutuları farklı sunuculara bakıyor: {first}, {second}")]
+    MixedServers {
+        plugin: String,
+        first: String,
+        second: String,
+    },
     #[error("{0} kutusunun width ve height değeri en az 1 olmalı")]
     EmptyBox(String),
     #[error("{first} ve {second} kutuları aynı hücrede: satır {row} sütun {col}")]
@@ -113,6 +119,18 @@ impl Profile {
         {
             return Err(ProfileError::UnknownCaptureInto(target.clone()));
         }
+        // task ids are server-local, so one plugin must not span servers
+        for (j, second) in self.boxes.iter().enumerate() {
+            for first in &self.boxes[..j] {
+                if first.plugin == second.plugin && server_of(first) != server_of(second) {
+                    return Err(ProfileError::MixedServers {
+                        plugin: second.plugin.clone(),
+                        first: first.id.clone(),
+                        second: second.id.clone(),
+                    });
+                }
+            }
+        }
         for (j, second) in self.boxes.iter().enumerate() {
             for first in &self.boxes[..j] {
                 if let Some((row, col)) = first_shared_cell(first, second) {
@@ -127,6 +145,13 @@ impl Profile {
         }
         Ok(())
     }
+}
+
+fn server_of(b: &BoxSpec) -> Option<&str> {
+    b.config
+        .get("url")
+        .and_then(toml::Value::as_str)
+        .map(|u| u.trim_end_matches('/'))
 }
 
 fn first_shared_cell(a: &BoxSpec, b: &BoxSpec) -> Option<(u32, u32)> {
@@ -278,6 +303,43 @@ config = { url = "https://destek.mono.tr", key_file = "~/.config/focusdeck/secre
             load_str(&t).unwrap_err().to_string(),
             "sozlu ve fikir kutuları aynı hücrede: satır 0 sütun 1"
         );
+    }
+
+    fn url_box(id: &str, col: u16, url: Option<&str>) -> String {
+        let cfg = url.map_or(String::new(), |u| format!("config = {{ url = \"{u}\" }}\n"));
+        format!(
+            "[[box]]\nid = \"{id}\"\ntitle = \"T\"\nplugin = \"vikunja\"\nrow = 0\ncol = {col}\n{cfg}"
+        )
+    }
+
+    fn url_profile(a: Option<&str>, b: Option<&str>) -> String {
+        format!("name = \"x\"\n{}{}", url_box("a", 0, a), url_box("b", 1, b))
+    }
+
+    #[test]
+    fn rejects_same_plugin_on_different_servers() {
+        for (a, b) in [
+            (Some("https://one.test"), Some("https://two.test")),
+            (Some("https://one.test"), None),
+            (None, Some("https://one.test")),
+        ] {
+            assert_eq!(
+                load_str(&url_profile(a, b)).unwrap_err().to_string(),
+                "vikunja kutuları farklı sunuculara bakıyor: a, b",
+                "{a:?} {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn same_plugin_on_one_server_is_fine() {
+        for (a, b) in [
+            (Some("https://one.test"), Some("https://one.test/")),
+            (Some("https://one.test/"), Some("https://one.test")),
+            (None, None),
+        ] {
+            assert!(load_str(&url_profile(a, b)).is_ok(), "{a:?} {b:?}");
+        }
     }
 
     #[test]
