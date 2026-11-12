@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Fake focusdeck plugin that serves made-up items for README screenshots."""
+import json
+import os
+import sys
+from datetime import datetime, timedelta
+
+now = datetime.now().astimezone().replace(minute=0, second=0, microsecond=0)
+
+
+def at(days, hour=17):
+    return (now + timedelta(days=days)).replace(hour=hour).isoformat()
+
+
+SETS = {
+    "tr": {
+        "today": [
+            ("Diş hekiminden randevu al", "telefon", at(-1), True),
+            ("Elektrik faturasını öde", None, at(0), False),
+            ("Kütüphane kitaplarını iade et", None, at(1), False),
+            ("Bitkileri sula", None, at(2), False),
+        ],
+        "waiting": [
+            ("Kargo teslimatı", "Kargo şirketi", at(-1), True),
+            ("Kira sözleşmesi taslağı", "Ev sahibi", None, False),
+            ("Reçete hazırlanması", "Eczane", at(2), False),
+        ],
+        "errands": [
+            ("Pasaportu yenile", "nüfus müdürlüğü", at(-3), True),
+            ("Kışlık lastikleri tak", "servis", at(2), False),
+            ("Doğum günü hediyesi al", None, at(5), False),
+            ("Bisikletin zincirini değiştir", None, None, False),
+            ("Kitaplığı duvara monte et", None, None, False),
+        ],
+        "mail": [
+            ("Üyelik yenileme hatırlatması", "Spor salonu · 4g", None, True),
+            ("Sipariş kargoya verildi", "Online mağaza · 5s", None, False),
+            ("Ayın faturası hazır", "İnternet sağlayıcısı · 40dk", None, False),
+        ],
+        "chat": [
+            ("pazar kahvaltısına geliyor musun?", "Aile grubu", None, False),
+            ("kitap kulübü bu ay perşembe", "Kitap kulübü", None, False),
+            ("apartman toplantısı cumartesi 11:00", "Site yönetimi", None, False),
+        ],
+        "ideas": [
+            ("Haftalık yemek planı yap", None, None, False),
+            ("Sabah yürüyüşüne başla", None, None, False),
+            ("Fotoğrafları albüme ayır", None, None, False),
+        ],
+        "errands-title": "Ayak işleri",
+    },
+    "en": {
+        "today": [
+            ("Book a dentist appointment", "phone", at(-1), True),
+            ("Pay the electricity bill", None, at(0), False),
+            ("Return library books", None, at(1), False),
+            ("Water the plants", None, at(2), False),
+        ],
+        "waiting": [
+            ("Parcel delivery", "Courier", at(-1), True),
+            ("Lease agreement draft", "Landlord", None, False),
+            ("Prescription refill", "Pharmacy", at(2), False),
+        ],
+        "errands": [
+            ("Renew passport", "registry office", at(-3), True),
+            ("Fit winter tyres", "garage", at(2), False),
+            ("Buy a birthday present", None, at(5), False),
+            ("Replace the bike chain", None, None, False),
+            ("Mount the bookshelf", None, None, False),
+        ],
+        "mail": [
+            ("Membership renewal reminder", "Gym · 4d", None, True),
+            ("Your order has shipped", "Online shop · 5h", None, False),
+            ("This month's bill is ready", "Internet provider · 40m", None, False),
+        ],
+        "chat": [
+            ("coming to sunday brunch?", "Family", None, False),
+            ("book club is on thursday this month", "Book club", None, False),
+            ("building meeting saturday 11:00", "Residents", None, False),
+        ],
+        "ideas": [
+            ("Plan weekly meals", None, None, False),
+            ("Start morning walks", None, None, False),
+            ("Sort photos into albums", None, None, False),
+        ],
+        "errands-title": "Errands",
+    },
+}
+
+lang = "tr" if os.environ.get("FOCUSDECK_LANG", "").lower().startswith("tr") else "en"
+data = SETS[lang]
+box = "today"
+
+
+def items():
+    out = []
+    for i, (title, sub, due, overdue) in enumerate(data[box]):
+        out.append({"id": f"{box}-{i}", "title": title, "subtitle": sub, "due": due,
+                    "overdue": overdue, "url": "https://example.com/" + box,
+                    "labels": [], "links": []})
+    if box == "today":
+        for rid in (0, 1):
+            title, _, due, overdue = data["errands"][rid]
+            out.insert(rid, {"id": f"plan-{rid}", "title": title, "subtitle": data["errands-title"],
+                             "due": due, "overdue": overdue, "url": "https://example.com/errands",
+                             "labels": [], "links": [],
+                             "source": {"plugin": "demo", "id": f"errands-{rid}"}})
+    return out
+
+
+for line in sys.stdin:
+    if not line.strip():
+        continue
+    req = json.loads(line)
+    method, params = req["method"], req.get("params") or {}
+    if method == "describe":
+        res = {"name": "demo", "version": "0.2.0", "protocol": 1,
+               "actions": ["done", "delete", "move", "reorder", "unstar"],
+               "accepts_drop": True, "reminders": False}
+    elif method == "configure":
+        box = params.get("set", "today")
+        res = {}
+    elif method == "list":
+        res = {"items": items()}
+    elif method == "drop":
+        res = dict(params["item"])
+    elif method == "reminders":
+        res = {"reminders": []}
+    else:
+        res = None
+    sys.stdout.write(json.dumps({"id": req["id"], "result": res}) + "\n")
+    sys.stdout.flush()

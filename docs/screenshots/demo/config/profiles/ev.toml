@@ -1,0 +1,51 @@
+name = "ev"
+capture_into = "today"
+
+[[box]]
+id = "today"
+title = "Bugün"
+plugin = "demo"
+row = 0
+col = 0
+config = { set = "today" }
+
+[[box]]
+id = "waiting"
+title = "Bekliyorum"
+plugin = "demo"
+row = 0
+col = 1
+config = { set = "waiting" }
+
+[[box]]
+id = "errands"
+title = "Ayak işleri"
+plugin = "demo"
+row = 0
+col = 2
+plan_into = "today"
+config = { set = "errands" }
+
+[[box]]
+id = "mail"
+title = "Yıldızlı mailler"
+plugin = "demo"
+row = 1
+col = 0
+config = { set = "mail" }
+
+[[box]]
+id = "chat"
+title = "Mesajlar"
+plugin = "demo"
+row = 1
+col = 1
+config = { set = "chat" }
+
+[[box]]
+id = "ideas"
+title = "Fikirler"
+plugin = "demo"
+row = 1
+col = 2
+config = { set = "ideas" }

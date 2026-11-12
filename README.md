@@ -10,7 +10,7 @@ Targets Linux x86_64 and aarch64. The interface is available in English and Turk
 
 | Zoomed box | Move | Key list |
 |---|---|---|
-| ![Zoomed Redmine box, planned items starred](docs/screenshots/en/zoom.png) | ![Choosing a target box](docs/screenshots/en/move.png) | ![Key list opened with ?](docs/screenshots/en/help.png) |
+| ![Zoomed Errands box, planned items starred](docs/screenshots/en/zoom.png) | ![Choosing a target box](docs/screenshots/en/move.png) | ![Key list opened with ?](docs/screenshots/en/help.png) |
 
 The data in the screenshots is made up.
 

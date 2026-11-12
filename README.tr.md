@@ -10,7 +10,7 @@ Linux x86_64 ve aarch64 hedeflenir. Arayüz İngilizce ve Türkçe gelir, yeni b
 
 | Büyütülmüş kutu | Taşıma | Tuş listesi |
 |---|---|---|
-| ![Büyütülmüş Redmine kutusu, planlananlar yıldızlı](docs/screenshots/tr/zoom.png) | ![Hedef kutu seçimi](docs/screenshots/tr/move.png) | ![? ile açılan tuş listesi](docs/screenshots/tr/help.png) |
+| ![Büyütülmüş Ayak işleri kutusu, planlananlar yıldızlı](docs/screenshots/tr/zoom.png) | ![Hedef kutu seçimi](docs/screenshots/tr/move.png) | ![? ile açılan tuş listesi](docs/screenshots/tr/help.png) |
 
 Görüntülerdeki veriler uydurmadır.
 
