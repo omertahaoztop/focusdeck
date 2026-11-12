@@ -28,6 +28,7 @@ use crate::config::Config;
 use crate::host::PluginHost;
 use crate::i18n::{self, msg, t, t_args};
 use crate::install;
+use crate::local::LOCAL;
 use crate::paths::Paths;
 use crate::profile::Profile;
 use crate::secrets;
@@ -210,18 +211,38 @@ pub fn build_host(
     spec: &crate::profile::BoxSpec,
 ) -> Result<PluginHost, String> {
     install::validate_name(&spec.plugin).map_err(|e| e.to_string())?;
-    let exe = paths.plugin_dir().join(&spec.plugin);
-    if !exe.is_file() {
-        return Err(t_args(
-            msg::ERROR_PLUGIN_NOT_INSTALLED,
-            &[("plugin", spec.plugin.as_str().into())],
-        ));
+    let (exe, args) = if spec.plugin == LOCAL {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        (exe, vec!["serve-local".to_owned()])
+    } else {
+        let exe = paths.plugin_dir().join(&spec.plugin);
+        if !exe.is_file() {
+            return Err(t_args(
+                msg::ERROR_PLUGIN_NOT_INSTALLED,
+                &[("plugin", spec.plugin.as_str().into())],
+            ));
+        }
+        (exe, Vec::new())
+    };
+    let mut config = secrets::plugin_config(spec, home).map_err(|e| e.to_string())?;
+    if spec.plugin == LOCAL {
+        config = local_config(spec, config);
     }
-    let config = secrets::plugin_config(spec, home).map_err(|e| e.to_string())?;
     Ok(
         PluginHost::new(spec.id.clone(), exe, config, paths.log_file())
+            .with_args(args)
             .with_lang(crate::i18n::requested().map(str::to_owned)),
     )
+}
+
+fn local_config(
+    spec: &crate::profile::BoxSpec,
+    mut config: serde_json::Value,
+) -> serde_json::Value {
+    if let Some(map) = config.as_object_mut() {
+        map.entry("list").or_insert_with(|| spec.id.clone().into());
+    }
+    config
 }
 
 pub async fn tui(paths: &Paths, cfg: &Config, profile: Profile) -> anyhow::Result<()> {
@@ -388,6 +409,39 @@ mod tests {
         assert_eq!(
             err,
             "vikunja is not installed, run focusdeck plugin install vikunja"
+        );
+    }
+
+    #[test]
+    fn local_box_needs_no_plugin_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            config_dir: dir.path().join("c"),
+            data_dir: dir.path().join("d"),
+            state_dir: dir.path().join("s"),
+        };
+        let mut spec = profile().boxes[SOZLU].clone();
+        spec.plugin = crate::local::LOCAL.into();
+        assert!(build_host(&paths, dir.path(), &spec).is_ok());
+        spec.plugin = "vikunja".into();
+        let err = build_host(&paths, dir.path(), &spec).err().unwrap();
+        assert_eq!(
+            err,
+            "vikunja is not installed, run focusdeck plugin install vikunja"
+        );
+    }
+
+    #[test]
+    fn local_config_defaults_list_to_box_id() {
+        let spec = &profile().boxes[SOZLU];
+        let id = spec.id.as_str();
+        assert_eq!(
+            local_config(spec, serde_json::json!({})),
+            serde_json::json!({ "list": id })
+        );
+        assert_eq!(
+            local_config(spec, serde_json::json!({ "list": "mine", "x": 1 })),
+            serde_json::json!({ "list": "mine", "x": 1 })
         );
     }
 }

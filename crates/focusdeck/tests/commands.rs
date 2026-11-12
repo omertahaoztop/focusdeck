@@ -613,3 +613,65 @@ fn errors_carry_a_localized_prefix() {
     assert!(tr.stderr().starts_with("hata: "), "{}", tr.stderr());
     assert!(tr.stderr().contains("okunamadı"), "{}", tr.stderr());
 }
+
+const LOCAL_PROFILE: &str = r#"
+name = "p"
+capture_into = "notes"
+
+[[box]]
+id = "notes"
+title = "Notes"
+plugin = "local"
+row = 0
+col = 0
+"#;
+
+fn local_notes(env: &Env) -> serde_json::Value {
+    let raw = std::fs::read_to_string(env.dir.path().join("data/local.json")).unwrap();
+    serde_json::from_str(&raw).unwrap()
+}
+
+#[test]
+fn capture_into_a_local_box_needs_no_plugin() {
+    let env = Env::new(LOCAL_PROFILE);
+    std::fs::remove_file(env.dir.path().join("data/plugins/vikunja")).unwrap();
+    let ran = env.run(&["capture", "süt al #ev"]);
+    assert_eq!(ran.code(), 0, "{}", ran.stderr());
+    let notes = local_notes(&env);
+    let items = notes["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["title"], "süt al");
+    assert_eq!(items[0]["labels"], serde_json::json!(["ev"]));
+    assert_eq!(items[0]["list"], "notes");
+}
+
+#[test]
+fn remind_sends_due_local_notes() {
+    let env = Env::new(LOCAL_PROFILE);
+    let due = Local::now().fixed_offset() - Duration::minutes(5);
+    let note = serde_json::json!({
+        "version": 1,
+        "items": [{
+            "id": "n1",
+            "list": "notes",
+            "title": "ilaç al",
+            "due": due.to_rfc3339(),
+            "position": 1.0,
+            "created": due.to_rfc3339(),
+        }],
+    });
+    std::fs::write(env.dir.path().join("data/local.json"), note.to_string()).unwrap();
+    let ran = env.run(&["remind", "--send"]);
+    assert_eq!(ran.code(), 0, "{}", ran.stderr());
+    let sent = env.notifications();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(sent[0].contains(&"⏰ ilaç al".to_string()), "{sent:?}");
+}
+
+#[test]
+fn serve_local_is_hidden_from_help() {
+    let env = Env::standard();
+    let help = env.run(&["--help"]).stdout();
+    assert!(help.contains("Focus board"), "{help}");
+    assert!(!help.contains("serve-local"), "{help}");
+}

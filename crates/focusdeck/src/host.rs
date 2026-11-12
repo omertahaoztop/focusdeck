@@ -75,6 +75,7 @@ impl Proc {
 pub struct PluginHost {
     label: String,
     exe: PathBuf,
+    args: Vec<String>,
     config: Value,
     log: PathBuf,
     lang: Option<String>,
@@ -88,6 +89,7 @@ impl PluginHost {
         PluginHost {
             label,
             exe,
+            args: Vec::new(),
             config,
             log,
             lang: None,
@@ -95,6 +97,11 @@ impl PluginHost {
             proc: None,
             describe: None,
         }
+    }
+
+    pub fn with_args(mut self, args: Vec<String>) -> Self {
+        self.args = args;
+        self
     }
 
     pub fn with_lang(mut self, lang: Option<String>) -> Self {
@@ -185,6 +192,7 @@ impl PluginHost {
 
     fn command(&self) -> Command {
         let mut command = Command::new(&self.exe);
+        command.args(&self.args);
         match &self.lang {
             Some(lang) => command.env("FOCUSDECK_LANG", lang),
             None => command.env_remove("FOCUSDECK_LANG"),
@@ -330,5 +338,15 @@ mod tests {
         assert_eq!(lang_env(&host), Some(None));
         let host = host.with_lang(Some("tr-TR".into()));
         assert_eq!(lang_env(&host), Some(Some("tr-TR".into())));
+    }
+
+    #[test]
+    fn with_args_reach_the_command() {
+        let host = PluginHost::new("x".into(), "plugin".into(), Value::Null, "log".into());
+        assert_eq!(host.command().as_std().get_args().count(), 0);
+        let host = host.with_args(vec!["serve-local".into()]);
+        let command = host.command();
+        let args: Vec<_> = command.as_std().get_args().collect();
+        assert_eq!(args, ["serve-local"]);
     }
 }

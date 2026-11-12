@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::display_safe;
 use crate::i18n::{msg, t_args};
+use crate::local::LOCAL;
 use crate::notify;
 use crate::paths::Paths;
 use crate::profile::Profile;
@@ -82,7 +83,7 @@ pub async fn run(
 
     let mut found: Vec<(String, Reminder)> = Vec::new();
     for spec in &profile.boxes {
-        if !paths.plugin_dir().join(&spec.plugin).is_file() {
+        if spec.plugin != LOCAL && !paths.plugin_dir().join(&spec.plugin).is_file() {
             continue;
         }
         let mut host = match build_host(paths, &home, spec) {
