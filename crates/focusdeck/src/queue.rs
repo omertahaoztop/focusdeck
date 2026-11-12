@@ -1,6 +1,8 @@
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
@@ -28,24 +30,78 @@ impl Queue {
     }
 
     pub fn take_all(&self) -> io::Result<Vec<Queued>> {
-        // Rename first so a push racing with the read lands in a fresh file.
-        let taken = self.path.with_extension("jsonl.taken");
-        match fs::rename(&self.path, &taken) {
-            Ok(()) => {}
+        let _lock = match self.lock() {
+            Ok(lock) => lock,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e),
+        };
+        // Leftovers of an interrupted drain come first (oldest first), then the live file.
+        let mut asides = self.leftovers()?;
+        let live = self.aside_name();
+        match fs::rename(&self.path, &live) {
+            Ok(()) => asides.push(live),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
         }
-        let raw = fs::read_to_string(&taken)?;
-        fs::remove_file(&taken)?;
-        // A line cut short by a crash must not block the rest of the queue.
-        Ok(raw
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect())
+
+        // Files are deleted only after every one was read, so an error loses nothing.
+        let mut out = Vec::new();
+        for aside in &asides {
+            out.extend(decode(&fs::read(aside)?));
+        }
+        for aside in &asides {
+            fs::remove_file(aside)?;
+        }
+        Ok(out)
     }
 
     pub fn put_back(&self, items: &[Queued]) -> io::Result<()> {
         self.append(items)
+    }
+
+    fn lock(&self) -> io::Result<File> {
+        let mut name = self.path.clone().into_os_string();
+        name.push(".lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(PathBuf::from(name))?;
+        file.lock()?;
+        Ok(file)
+    }
+
+    fn file_name(&self) -> String {
+        self.path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+    }
+
+    fn aside_name(&self) -> PathBuf {
+        let mut name = self.path.clone().into_os_string();
+        name.push(format!(".taken.{}", unique_suffix()));
+        PathBuf::from(name)
+    }
+
+    fn leftovers(&self) -> io::Result<Vec<PathBuf>> {
+        let dir = match self.path.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => Path::new("."),
+        };
+        let prefix = format!("{}.taken.", self.file_name());
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let mut found = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                found.push(entry.path());
+            }
+        }
+        found.sort();
+        Ok(found)
     }
 
     fn append(&self, items: &[Queued]) -> io::Result<()> {
@@ -60,12 +116,28 @@ impl Queue {
             buf.push_str(&serde_json::to_string(item).map_err(io::Error::other)?);
             buf.push('\n');
         }
+        let _lock = self.lock()?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
         file.write_all(buf.as_bytes())
     }
+}
+
+fn unique_suffix() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{nanos:020}-{}-{n:06}", std::process::id())
+}
+
+// Per-line decoding: a crash-truncated line, even one cut inside a multi-byte char, is dropped alone.
+fn decode(raw: &[u8]) -> impl Iterator<Item = Queued> {
+    raw.split(|&b| b == b'\n')
+        .filter_map(|line| serde_json::from_slice(line).ok())
 }
 
 #[cfg(test)]
@@ -155,5 +227,84 @@ mod tests {
         let q = Queue::new(dir.path().join("state/capture-queue.jsonl"));
         q.push("x", at("2026-11-12T10:00:00+03:00")).unwrap();
         assert_eq!(q.take_all().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn truncated_multibyte_line_keeps_valid_lines() {
+        let (dir, q) = queue();
+        let mut raw = b"{\"text\":\"ok\",\"at\":\"2026-11-12T10:00:00+03:00\"}\n".to_vec();
+        let broken = "{\"text\":\"koş".as_bytes();
+        raw.extend_from_slice(&broken[..broken.len() - 1]);
+        assert!(std::str::from_utf8(&raw).is_err());
+        fs::write(dir.path().join("capture-queue.jsonl"), raw).unwrap();
+        let got = q.take_all().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text, "ok");
+    }
+
+    #[test]
+    fn stale_aside_files_are_recovered_oldest_first() {
+        let (dir, q) = queue();
+        let line = |t: &str| format!("{{\"text\":\"{t}\",\"at\":\"2026-11-12T10:00:00+03:00\"}}\n");
+        fs::write(
+            dir.path()
+                .join("capture-queue.jsonl.taken.00000000000000000002-1-000000"),
+            line("yeni-kalan"),
+        )
+        .unwrap();
+        fs::write(
+            dir.path()
+                .join("capture-queue.jsonl.taken.00000000000000000001-1-000000"),
+            line("eski-kalan"),
+        )
+        .unwrap();
+        q.push("canli", at("2026-11-12T10:00:00+03:00")).unwrap();
+        let texts: Vec<_> = q.take_all().unwrap().into_iter().map(|i| i.text).collect();
+        assert_eq!(texts, ["eski-kalan", "yeni-kalan", "canli"]);
+        let rest: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(rest, ["capture-queue.jsonl.lock"]);
+    }
+
+    #[test]
+    fn stale_aside_without_live_file_is_recovered() {
+        let (dir, q) = queue();
+        fs::write(
+            dir.path()
+                .join("capture-queue.jsonl.taken.00000000000000000001-1-000000"),
+            "{\"text\":\"kaldi\",\"at\":\"2026-11-12T10:00:00+03:00\"}\n",
+        )
+        .unwrap();
+        let got = q.take_all().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text, "kaldi");
+        assert!(q.take_all().unwrap().is_empty());
+    }
+
+    #[test]
+    fn concurrent_drains_neither_lose_nor_duplicate() {
+        let (_dir, q) = queue();
+        for i in 0..50 {
+            q.push(&format!("n{i}"), at("2026-11-12T10:00:00+03:00"))
+                .unwrap();
+        }
+        let q = std::sync::Arc::new(q);
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let q = q.clone();
+                std::thread::spawn(move || q.take_all().unwrap())
+            })
+            .collect();
+        let mut all: Vec<String> = handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .map(|i| i.text)
+            .collect();
+        all.sort();
+        let mut want: Vec<String> = (0..50).map(|i| format!("n{i}")).collect();
+        want.sort();
+        assert_eq!(all, want);
     }
 }
