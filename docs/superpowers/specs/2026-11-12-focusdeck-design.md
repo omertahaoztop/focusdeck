@@ -39,8 +39,9 @@ Kapsam dışı:
 | `focusdeck-plugins` | Hazır plugin'lerin Rust kaynağı, `index.toml` dizin dosyası, sürüm iş akışları |
 
 İkisi de GitHub'da herkese açık. Kişiye özel bilgi (adresler, hesaplar) kodda yer almaz, yalnız
-kullanıcının profil dosyasında durur. Ortak tipler `focusdeck-plugins` içinde bir `focusdeck-protocol`
-crate'inde durur, çekirdek onu sürüm etiketiyle bağımlılık olarak alır.
+kullanıcının profil dosyasında durur. Ortak tipler ve Rust plugin yazarları için `serve` yardımcısı
+çekirdek reposundaki `focusdeck-protocol` crate'inde durur. Plugin reposu onu sürüm etiketiyle
+bağımlılık olarak alır; repolar GitHub'a gönderilene kadar yerel yol bağımlılığı kullanılır.
 
 Kullanılan crate'ler: `ratatui` + `crossterm` (ekran, fare olayları), `tokio` (plugin süreçleri,
 zamanlayıcılar), `serde` + `serde_json` + `toml`, `reqwest` (rustls), `sha2`.
@@ -59,11 +60,11 @@ mesaj, stdin'den istek, stdout'tan cevap. stderr çekirdeğin log dosyasına yaz
 | Yöntem | Parametre | Cevap |
 |---|---|---|
 | `describe` | yok | `name`, `version`, `protocol: 1`, `actions` (desteklenen eylemler), `accepts_drop`, `reminders` |
-| `configure` | profildeki `config` tablosu | boş; hatalı ayar `error` döner |
-| `list` | `view`: `summary` ya da `full`, isteğe bağlı `query` | `items` |
-| `action` | `item`, `action` (`done`, `open`, `unstar`, `move`, `reorder`) ve eyleme özgü alanlar | güncellenmiş öğe ya da boş |
-| `drop` | başka kutudan gelen öğe ve `source` | oluşturulan öğe |
-| `reminders` | `since` (RFC 3339) | saati gelmiş öğeler |
+| `configure` | profildeki `config` tablosu, JSON nesnesi olarak | boş; hatalı ayar `error` döner |
+| `list` | `view`: `summary` ya da `full` | `items` |
+| `action` | `item` (öğe kimliği), `action` (`done`, `delete`, `move`, `reorder`, `unstar`), `args` | güncellenmiş öğe ya da boş |
+| `drop` | `item` (bırakılan öğe), `from` (öğenin geldiği plugin ve kimlik, dışarıdan notta yok) | oluşturulan ya da taşınan öğe |
+| `reminders` | `since` (RFC 3339) | `at` ve `item` çiftleri |
 
 Öğe şeması:
 
@@ -75,14 +76,28 @@ mesaj, stdin'den istek, stdout'tan cevap. stderr çekirdeğin log dosyasına yaz
   "url": "https://destek.mono.tr/issues/45539",
   "due": "2026-11-08T17:00:00+03:00",
   "overdue": true,
-  "source": {"plugin": "redmine", "id": "45539"}
+  "source": {"plugin": "redmine", "id": "45539"},
+  "description": null,
+  "labels": [],
+  "from": null,
+  "links": []
 }
 ```
 
-- `source` yalnız başka kutudan gelmiş öğelerde bulunur. Vikunja plugin'i bunu görevin açıklamasına
-  makine tarafından okunur bir satır olarak yazar ve geri okur.
-- Her istek için zaman aşımı 15 saniye. Zaman aşımı ya da süreç çökmesi kutuda kırmızı bir satır
-  olarak görünür, çekirdek plugin'i bir sonraki yenilemede yeniden başlatır. Öteki kutular etkilenmez.
+- `source` öğenin asıl kaynağıdır ve yalnız başka kutudan gelmiş öğelerde bulunur. Vikunja plugin'i
+  bunu görev açıklamasına `focusdeck-source: redmine:45539` satırı olarak yazar ve geri okur.
+- `labels`, `from`, `description`, `links` dışarıdan not alırken dolar. Plugin bunları kendi
+  karşılığına çevirir (Vikunja'da etiket, `kimden:<ad>` etiketi, açıklama, link paragrafı).
+- `drop` içindeki `from` hedef plugin ile aynıysa (Vikunja görevi başka Vikunja kutusuna) plugin
+  yeni görev açmaz, mevcut görevi taşır.
+- `move` ve `reorder` eylemlerinde `args`: `{"position": 0}` listede yeni sıra, 0 en üst.
+- `open` eylemi yoktur. Linki çekirdek `xdg-open` ile açar.
+- Profilde adı `_file` ile biten her ayarın `~`'i çekirdekte açılır. Çekirdek `configure`'dan önce
+  dosyanın izinlerine bakar, grup ya da başkaları okuyabiliyorsa kutuyu açmaz. Şifreyi plugin okur,
+  değer çekirdekten geçmez.
+- Her istek için zaman aşımı 15 saniye. Zaman aşımı, JSON olmayan satır ya da süreç çökmesi kutuda
+  kırmızı bir satır olarak görünür, çekirdek plugin'i bir sonraki yenilemede yeniden başlatır.
+  Öteki kutular etkilenmez.
 - `describe` cevabındaki `protocol` çekirdeğin bildiği sürümden farklıysa kutu açılmaz ve hata
   satırında iki sürüm yazar.
 
@@ -118,11 +133,15 @@ sha256 = "64 haneli onaltılık sağlama"
 - Yer: `~/.config/focusdeck/profiles/<ad>.toml`. Seçim sırası: `--profile`, `FOCUSDECK_PROFILE`,
   `config.toml` içindeki `default_profile`.
 - Şifreler profilde yazmaz, yalnız dosya yolu yazar (`token_file`, `key_file`). Varsayılan klasör
-  `~/.config/focusdeck/secrets/`, dosyalar 0600. Çekirdek izinleri daha geniş bir dosyayı okumaz.
+  `~/.config/focusdeck/secrets/`, dosyalar 0600. Grup ya da başkaları okuyabiliyorsa kutu açılmaz.
+- Dışarıdan not ayarları profilde: `capture_into` (hedef kutu), `capture_refs` (önek → link
+  kalıbı), `capture_label_aliases` (kısa etiket → asıl etiket).
 
 ```toml
 name = "iş"
 capture_into = "sozlu"
+capture_refs = { R = "https://destek.mono.tr/issues/{}" }
+capture_label_aliases = { tel = "telefon", yuz = "yuz-yuze", "yüz" = "yuz-yuze" }
 
 [[box]]
 id = "sozlu"
@@ -159,6 +178,7 @@ Tuşlar, hepsi tek tuş:
 |---|---|---|
 | `a` | not al (`capture_into` kutusuna) | aynı |
 | `x` | seçili öğe bitti | aynı |
+| `u` | seçili öğenin yıldızını kaldır (Zulip) | aynı |
 | `m` | taşı: hedef kutu listesi açılır | aynı |
 | `boşluk` | yok | `plan_into` olan kutuda planıma al / çıkar |
 | `o` | linki tarayıcıda aç | aynı |
@@ -178,7 +198,7 @@ Fare:
 
 - `plan_into` olan kutunun `summary` görünümü yalnız hedef kutuda `source` olarak bağlı öğeleri
   gösterir. Büyütülmüş görünüm hepsini gösterir, planlananlar ★ ile işaretlidir.
-- Boşluk tuşu öğeyi hedef kutuya `drop` eder, ikinci basış bağlı görevi siler.
+- Boşluk tuşu öğeyi hedef kutuya `drop` eder, ikinci basış bağlı görevi `action: delete` ile siler.
 - Kaynak plugin bir öğeyi artık listelemiyorsa (Redmine işi kapandı) çekirdek ona bağlı hedef
   öğeye `action: done` gönderir. Bu kontrol yalnız kaynak `list` başarıyla döndüğünde yapılır,
   hata durumunda hiçbir görev kapanmaz.
@@ -187,10 +207,10 @@ Fare:
 
 | Plugin | Listeler | Eylemler | Drop | Hatırlatma |
 |---|---|---|---|---|
-| `vikunja` | Projedeki açık görevler (isteğe bağlı sütun süzgeci) | `done`, `move` (sütun), `reorder`, `open` | Evet: görev açar, link ve `source` açıklamada | Evet: hatırlatma saati gelenler |
-| `redmine` | Bana atanmış açık işler, öncelik ve gecikme | `open` | Hayır | Hayır |
-| `gmail` | `is:starred` mailler, 3+ gün kırmızı | `open` | Hayır | Hayır |
-| `zulip` | Yıldızlı mesajlar | `unstar`, `open` | Hayır | Hayır |
+| `vikunja` | Projedeki açık görevler (isteğe bağlı sütun süzgeci) | `done`, `delete`, `move`, `reorder` | Evet: görev açar ya da Vikunja görevini taşır | Evet: hatırlatma saati gelenler |
+| `redmine` | Bana atanmış açık işler, öncelik ve gecikme | yok | Hayır | Hayır |
+| `gmail` | `is:starred` mailler, 3+ gün kırmızı | yok | Hayır | Hayır |
+| `zulip` | Yıldızlı mesajlar | `unstar` | Hayır | Hayır |
 | `whatsapp` | GOWA'da kendime sohbetinin mesajları | `done` (yalnız yerel gizleme) | Hayır | Hayır |
 
 - Fikirler kutusu `vikunja` plugin'inin başka bir projeyle çalışan ikinci örneğidir ("Mono Fikirler").
@@ -203,8 +223,15 @@ Fare:
 
 - `focusdeck capture "metin"` doğrudan, metinsiz çağrı `capture_command` ile (varsayılan rofi)
   tek satır sorar.
-- Yazım bugünkü `pano yakala` ile aynı: `@kişi`, `#etiket`, son kelime `SS:DD` ise son tarih ve
-  hatırlatma o saat, `#45539` Redmine linki.
+- Yazım bugünkü `pano yakala` ile aynı:
+  - `//` sonrası açıklamadır.
+  - Başlığın son kelimesi `30dk` ya da `2s` ise şimdiden o kadar sonra; `SS:DD` ise bugün o saat,
+    geçmişse yarın. Önünde `yarın` ya da gün kısaltması (`pzt`, `sal`, `çar`, `per`, `cum`, `cmt`,
+    `paz` ve ASCII yazımları) varsa o gün, geçmişse bir hafta sonra. Zaman son tarih ve hatırlatma olur.
+  - İlk `@ad` kimden bilgisidir. `#kelime` etikettir, `capture_label_aliases` ile çevrilir,
+    yalnız rakamdan oluşan `#123` düz metin kalır.
+  - `capture_refs` önekiyle başlayıp en az iki rakamla süren kelime (`R45539`) linke çevrilir.
+  - Geri kalan kelimeler başlıktır. Başlık boşsa not eklenmez, komut 1 ile çıkar.
 - Hedef profilin `capture_into` kutusudur. Plugin ulaşılamazsa not
   `~/.local/state/focusdeck/capture-queue.jsonl`'a yazılır, komut 1 ile çıkar, bir sonraki
   başarılı yakalamada kuyruk boşaltılır.
@@ -213,8 +240,10 @@ Fare:
 
 ## Bildirim: `focusdeck remind`
 
-- `focusdeck remind --send` profildeki `reminders` destekli kutulara sorar, saati gelenleri
-  `notify-send` ile gösterir, gösterilenleri `~/.local/state/focusdeck/reminded.json`'a yazar.
+- `focusdeck remind --send` profildeki `reminders` destekli kutulara son 12 saati sorar, saati
+  gelmiş ve daha önce gösterilmemiş olanları `notify-send -u critical` ile gösterir (başlık
+  `⏰ <görev>`, gövde `SS:DD`). Gösterilenler `~/.local/state/focusdeck/reminded.json`'a
+  `<kutu>:<öğe>@<zaman>` anahtarıyla yazılır, 7 günden eski kayıtlar silinir.
 - `focusdeck-remind.service` + `.timer`, her dakika, bugünkü `pano-hatirlat` ile aynı biçim.
 
 ## GOWA kurulumu
