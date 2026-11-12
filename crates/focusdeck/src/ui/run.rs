@@ -195,7 +195,7 @@ fn open_url(app: &mut App, url: &str) {
     }
 }
 
-fn build_host(
+pub fn build_host(
     paths: &Paths,
     home: &std::path::Path,
     spec: &crate::profile::BoxSpec,

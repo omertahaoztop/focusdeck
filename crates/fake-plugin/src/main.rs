@@ -1,11 +1,12 @@
-//! Test plugin whose behaviour comes from FAKE_MODE_FILE or FAKE_MODE; every configure is appended to FAKE_LOG.
+//! Test plugin whose behaviour comes from FAKE_MODE_FILE or FAKE_MODE; configure and drop calls are appended to FAKE_LOG, reminders come from FAKE_REMINDERS_FILE.
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::time::Duration;
 
 use focusdeck_protocol::{
-    ActionParams, Describe, DropParams, Item, ListParams, PROTOCOL_VERSION, Plugin, serve,
+    ActionParams, Describe, DropParams, Item, ListParams, PROTOCOL_VERSION, Plugin, Reminder,
+    RemindersParams, serve,
 };
 use serde_json::Value;
 
@@ -48,7 +49,7 @@ impl Plugin for Fake {
             },
             actions: vec!["done".into()],
             accepts_drop: true,
-            reminders: false,
+            reminders: std::env::var_os("FAKE_REMINDERS_FILE").is_some(),
         }
     }
 
@@ -89,7 +90,29 @@ impl Plugin for Fake {
         Ok(None)
     }
 
+    fn reminders(&mut self, _p: RemindersParams) -> Result<Vec<Reminder>, String> {
+        let Ok(path) = std::env::var("FAKE_REMINDERS_FILE") else {
+            return Ok(vec![]);
+        };
+        match std::fs::read_to_string(path) {
+            Ok(text) => serde_json::from_str(&text).map_err(|e| e.to_string()),
+            Err(_) => Ok(vec![]),
+        }
+    }
+
     fn drop_item(&mut self, p: DropParams) -> Result<Item, String> {
+        if mode() == "crash" {
+            std::process::exit(3);
+        }
+        if let Ok(path) = std::env::var("FAKE_LOG")
+            && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path)
+        {
+            let _ = writeln!(
+                file,
+                "drop {}",
+                serde_json::to_string(&p.item).unwrap_or_default()
+            );
+        }
         Ok(Item {
             id: "yeni".into(),
             ..p.item
