@@ -1,7 +1,14 @@
+use crate::i18n::{msg, t_args};
 use std::time::Duration;
 
 pub fn parse(s: &str) -> Result<Duration, String> {
-    let bad = || format!("geçersiz süre: {s:?} (örnek: 90s, 2m, 1h)");
+    let quoted = format!("{s:?}");
+    let bad = || {
+        t_args(
+            msg::ERROR_DURATION_INVALID,
+            &[("value", quoted.as_str().into())],
+        )
+    };
     let unit = s.chars().next_back().ok_or_else(bad)?;
     let per_unit: u64 = match unit {
         's' => 1,
@@ -16,7 +23,10 @@ pub fn parse(s: &str) -> Result<Duration, String> {
     let n: u64 = digits.parse().map_err(|_| bad())?;
     let secs = n.checked_mul(per_unit).ok_or_else(bad)?;
     if secs == 0 {
-        return Err(format!("süre sıfır olamaz: {s:?}"));
+        return Err(t_args(
+            msg::ERROR_DURATION_ZERO,
+            &[("value", quoted.as_str().into())],
+        ));
     }
     Ok(Duration::from_secs(secs))
 }
@@ -31,6 +41,15 @@ mod tests {
         assert_eq!(parse("90s"), Ok(Duration::from_secs(90)));
         assert_eq!(parse("2m"), Ok(Duration::from_secs(120)));
         assert_eq!(parse("1h"), Ok(Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn error_texts_are_english_without_a_language() {
+        assert_eq!(
+            parse("2").unwrap_err(),
+            "invalid duration: \"2\" (example: 90s, 2m, 1h)"
+        );
+        assert_eq!(parse("0m").unwrap_err(), "duration cannot be zero: \"0m\"");
     }
 
     #[test]

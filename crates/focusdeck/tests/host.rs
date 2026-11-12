@@ -336,7 +336,7 @@ async fn worker_survives_plugin_error() {
         BoxEvent::Described { .. }
     ));
     match next_event(&mut ev_rx).await {
-        BoxEvent::Listed { result, .. } => assert_eq!(result.unwrap_err(), "plugin kapandı"),
+        BoxEvent::Listed { result, .. } => assert_eq!(result.unwrap_err(), "plugin exited"),
         other => panic!("Listed bekleniyordu: {other:?}"),
     }
     env.set_mode("ok");

@@ -1,3 +1,4 @@
+use crate::i18n::{msg, t, t_args};
 use anyhow::{Context, bail};
 use focusdeck_protocol::PROTOCOL_VERSION;
 use serde::{Deserialize, Serialize};
@@ -53,7 +54,7 @@ pub fn current_target() -> &'static str {
 }
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-compile_error!("focusdeck yalnız x86_64 ve aarch64 Linux için derlenir");
+compile_error!("focusdeck builds only for x86_64 and aarch64 Linux");
 
 /// Ad hem dosya yoluna hem manifest adına girdiği için düz dosya adı olmalı.
 pub fn validate_name(name: &str) -> anyhow::Result<()> {
@@ -62,9 +63,20 @@ pub fn validate_name(name: &str) -> anyhow::Result<()> {
         || name.contains(['/', '\\', '\0'])
         || name.ends_with(".toml")
     {
-        bail!("geçersiz plugin adı: {name:?}");
+        bail!(t_args(
+            msg::INSTALL_INVALID_NAME,
+            &[("name", format!("{name:?}").as_str().into())]
+        ));
     }
     Ok(())
+}
+
+fn path_text(id: &str, path: &Path) -> String {
+    t_args(id, &[("path", path.display().to_string().as_str().into())])
+}
+
+fn download_failed(url: &str) -> String {
+    t_args(msg::INSTALL_DOWNLOAD_FAILED, &[("url", url.into())])
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -78,23 +90,26 @@ pub fn verify_sha256(bytes: &[u8], hex: &str) -> anyhow::Result<()> {
     if sha256_hex(bytes).eq_ignore_ascii_case(hex.trim()) {
         Ok(())
     } else {
-        bail!("sağlama tutmadı")
+        bail!(t(msg::INSTALL_CHECKSUM_MISMATCH))
     }
 }
 
 pub async fn fetch(url: &str) -> anyhow::Result<Vec<u8>> {
     if let Some(path) = url.strip_prefix("file://") {
         if !path.starts_with('/') {
-            bail!("file:// adresi mutlak yol olmalı: {url}");
+            bail!(t_args(
+                msg::INSTALL_FILE_URL_RELATIVE,
+                &[("url", url.into())]
+            ));
         }
         return read_local(Path::new(path))
             .await
-            .with_context(|| format!("{path} okunamadı"));
+            .with_context(|| t_args(msg::INSTALL_READ_FAILED, &[("path", path.into())]));
     }
     if url.starts_with("http://") || url.starts_with("https://") {
         return fetch_http(url).await;
     }
-    bail!("desteklenmeyen adres (yalnız http, https, file): {url}")
+    bail!(t_args(msg::INSTALL_UNSUPPORTED_URL, &[("url", url.into())]))
 }
 
 async fn read_local(path: &Path) -> anyhow::Result<Vec<u8>> {
@@ -105,7 +120,7 @@ async fn read_local(path: &Path) -> anyhow::Result<Vec<u8>> {
         .read_to_end(&mut buf)
         .await?;
     if buf.len() > MAX_DOWNLOAD_BYTES {
-        bail!("dosya çok büyük");
+        bail!(t(msg::INSTALL_FILE_TOO_LARGE));
     }
     Ok(buf)
 }
@@ -113,11 +128,11 @@ async fn read_local(path: &Path) -> anyhow::Result<Vec<u8>> {
 async fn fetch_http(url: &str) -> anyhow::Result<Vec<u8>> {
     let no_downgrade = reqwest::redirect::Policy::custom(|attempt| {
         if attempt.previous().len() >= 5 {
-            attempt.error("çok fazla yönlendirme")
+            attempt.error(t(msg::INSTALL_TOO_MANY_REDIRECTS))
         } else if attempt.url().scheme() != "https"
             && attempt.previous().iter().any(|u| u.scheme() == "https")
         {
-            attempt.error("https adresinden http adresine yönlendirme reddedildi")
+            attempt.error(t(msg::INSTALL_REDIRECT_DOWNGRADE))
         } else {
             attempt.follow()
         }
@@ -128,24 +143,30 @@ async fn fetch_http(url: &str) -> anyhow::Result<Vec<u8>> {
         .connect_timeout(CONNECT_TIMEOUT)
         .redirect(no_downgrade)
         .build()
-        .context("HTTP istemcisi kurulamadı")?;
+        .with_context(|| t(msg::INSTALL_HTTP_CLIENT))?;
     let mut response = client
         .get(url)
         .send()
         .await
-        .with_context(|| format!("{url} indirilemedi"))?;
+        .with_context(|| download_failed(url))?;
     let status = response.status();
     if !status.is_success() {
-        bail!("{url} indirilemedi: HTTP {}", status.as_u16());
+        bail!(t_args(
+            msg::INSTALL_HTTP_STATUS,
+            &[
+                ("url", url.into()),
+                ("status", status.as_u16().to_string().as_str().into())
+            ]
+        ));
     }
     let mut buf = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
-        .with_context(|| format!("{url} indirilemedi"))?
+        .with_context(|| download_failed(url))?
     {
         if buf.len() + chunk.len() > MAX_DOWNLOAD_BYTES {
-            bail!("{url} çok büyük");
+            bail!(t_args(msg::INSTALL_URL_TOO_LARGE, &[("url", url.into())]));
         }
         buf.extend_from_slice(&chunk);
     }
@@ -154,8 +175,8 @@ async fn fetch_http(url: &str) -> anyhow::Result<Vec<u8>> {
 
 pub async fn load_index(registry: &str) -> anyhow::Result<Index> {
     let bytes = fetch(registry).await?;
-    let text = String::from_utf8(bytes).context("dizin UTF-8 değil")?;
-    toml::from_str(&text).context("dizin geçersiz")
+    let text = String::from_utf8(bytes).with_context(|| t(msg::INSTALL_INDEX_NOT_UTF8))?;
+    toml::from_str(&text).with_context(|| t(msg::INSTALL_INDEX_INVALID))
 }
 
 pub async fn install(
@@ -179,28 +200,38 @@ pub async fn install(
     }
     let Some((registry, entry)) = found else {
         if failures.is_empty() {
-            bail!("dizinlerde böyle bir plugin yok: {name}");
+            bail!(t_args(msg::INSTALL_NOT_FOUND, &[("name", name.into())]));
         }
-        bail!(
-            "dizinlerde böyle bir plugin yok: {name} (ulaşılamayan dizinler: {})",
-            failures.join("; ")
-        );
+        bail!(t_args(
+            msg::INSTALL_NOT_FOUND_UNREACHABLE,
+            &[
+                ("name", name.into()),
+                ("failures", failures.join("; ").as_str().into())
+            ]
+        ));
     };
     if entry.protocol != PROTOCOL_VERSION {
-        bail!(
-            "{name} protokol {} istiyor, çekirdek {PROTOCOL_VERSION} biliyor",
-            entry.protocol
-        );
+        bail!(t_args(
+            msg::INSTALL_PROTOCOL_MISMATCH,
+            &[
+                ("name", name.into()),
+                ("wanted", entry.protocol.to_string().as_str().into()),
+                ("known", PROTOCOL_VERSION.to_string().as_str().into())
+            ]
+        ));
     }
     let target = entry.targets.get(current_target()).ok_or_else(|| {
-        anyhow::anyhow!(
-            "{name} için bu makineye uygun sürüm yok ({})",
-            current_target()
-        )
+        anyhow::anyhow!(t_args(
+            msg::INSTALL_NO_TARGET,
+            &[("name", name.into()), ("target", current_target().into())]
+        ))
     })?;
     let bytes = fetch(&target.url).await?;
     if verify_sha256(&bytes, &target.sha256).is_err() {
-        bail!("sağlama tutmadı: {name}");
+        bail!(t_args(
+            msg::INSTALL_CHECKSUM_MISMATCH_NAMED,
+            &[("name", name.into())]
+        ));
     }
     let manifest = Manifest {
         version: entry.version.clone(),
@@ -208,7 +239,7 @@ pub async fn install(
         registry: registry.clone(),
     };
     std::fs::create_dir_all(plugin_dir)
-        .with_context(|| format!("{} oluşturulamadı", plugin_dir.display()))?;
+        .with_context(|| path_text(msg::INSTALL_DIR_CREATE_FAILED, plugin_dir))?;
     write_binary(plugin_dir, name, &bytes)?;
     if let Err(e) = write_manifest(plugin_dir, name, &manifest) {
         let _ = std::fs::remove_file(plugin_dir.join(name));
@@ -220,7 +251,8 @@ pub async fn install(
 fn write_binary(plugin_dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<()> {
     let part = plugin_dir.join(format!(".{name}.part"));
     let result = write_part(&part, bytes).and_then(|()| {
-        std::fs::rename(&part, plugin_dir.join(name)).context("plugin yerine konamadı")
+        std::fs::rename(&part, plugin_dir.join(name))
+            .with_context(|| t(msg::INSTALL_REPLACE_FAILED))
     });
     if result.is_err() {
         let _ = std::fs::remove_file(&part);
@@ -235,16 +267,18 @@ fn write_part(part: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(part)
-        .with_context(|| format!("{} oluşturulamadı", part.display()))?;
-    file.write_all(bytes).context("plugin yazılamadı")?;
-    file.sync_all().context("plugin diske işlenemedi")?;
+        .with_context(|| path_text(msg::INSTALL_DIR_CREATE_FAILED, part))?;
+    file.write_all(bytes)
+        .with_context(|| t(msg::INSTALL_WRITE_FAILED))?;
+    file.sync_all()
+        .with_context(|| t(msg::INSTALL_SYNC_FAILED))?;
     file.set_permissions(std::fs::Permissions::from_mode(0o755))
-        .context("plugin çalıştırılabilir yapılamadı")
+        .with_context(|| t(msg::INSTALL_CHMOD_FAILED))
 }
 
 fn write_manifest(plugin_dir: &Path, name: &str, manifest: &Manifest) -> anyhow::Result<()> {
     let part = plugin_dir.join(format!(".{name}.toml.part"));
-    let text = toml::to_string(manifest).context("manifest yazılamadı")?;
+    let text = toml::to_string(manifest).with_context(|| t(msg::INSTALL_MANIFEST_FAILED))?;
     let result = remove_if_exists(&part)
         .and_then(|()| {
             let mut file = std::fs::OpenOptions::new()
@@ -260,7 +294,7 @@ fn write_manifest(plugin_dir: &Path, name: &str, manifest: &Manifest) -> anyhow:
             std::fs::rename(&part, plugin_dir.join(format!("{name}.toml")))
                 .map_err(anyhow::Error::from)
         })
-        .context("manifest yazılamadı");
+        .with_context(|| t(msg::INSTALL_MANIFEST_FAILED));
     if result.is_err() {
         let _ = std::fs::remove_file(&part);
     }
@@ -271,7 +305,7 @@ fn remove_if_exists(path: &Path) -> anyhow::Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("{} silinemedi", path.display())),
+        Err(e) => Err(e).with_context(|| path_text(msg::INSTALL_DELETE_FAILED, path)),
     }
 }
 
@@ -305,11 +339,13 @@ pub fn remove(plugin_dir: &Path, name: &str) -> anyhow::Result<()> {
         match std::fs::remove_file(&path) {
             Ok(()) => removed = true,
             Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => return Err(e).with_context(|| format!("{} silinemedi", path.display())),
+            Err(e) => {
+                return Err(e).with_context(|| path_text(msg::INSTALL_DELETE_FAILED, &path));
+            }
         }
     }
     if !removed {
-        bail!("plugin kurulu değil: {name}");
+        bail!(t_args(msg::INSTALL_NOT_INSTALLED, &[("name", name.into())]));
     }
     Ok(())
 }

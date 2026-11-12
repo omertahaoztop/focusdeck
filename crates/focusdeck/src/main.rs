@@ -15,7 +15,11 @@ async fn main() -> ExitCode {
     match run(cli).await {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("hata: {}", focusdeck::cli::render_error(&e));
+            eprintln!(
+                "{} {}",
+                i18n::t(i18n::msg::ERROR_PREFIX),
+                focusdeck::cli::render_error(&e)
+            );
             ExitCode::FAILURE
         }
     }

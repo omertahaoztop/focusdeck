@@ -235,6 +235,10 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> Ran {
+        self.run_in(args, "C")
+    }
+
+    fn run_in(&self, args: &[&str], locale: &str) -> Ran {
         let root = self.dir.path();
         let path = format!(
             "{}:{}",
@@ -244,6 +248,10 @@ impl Env {
         let out = Command::new(env!("CARGO_BIN_EXE_focusdeck"))
             .args(args)
             .env("PATH", path)
+            .env_remove("FOCUSDECK_LANG")
+            .env_remove("LANG")
+            .env_remove("LC_MESSAGES")
+            .env("LC_ALL", locale)
             .env("FOCUSDECK_PROFILE", "p")
             .env("FOCUSDECK_CONFIG_DIR", root.join("config"))
             .env("FOCUSDECK_DATA_DIR", root.join("data"))
@@ -275,7 +283,7 @@ fn capture_with_time_drops_and_notifies() {
     assert_eq!(drops.len(), 1);
     assert_eq!(drops[0].title, "log at");
     assert!(drops[0].due.is_some());
-    assert_eq!(env.notifications(), [["--", "eklendi", "log at · 14:30"]]);
+    assert_eq!(env.notifications(), [["--", "added", "log at · 14:30"]]);
     assert!(env.queue().take_all().unwrap().is_empty());
 }
 
@@ -283,7 +291,7 @@ fn capture_with_time_drops_and_notifies() {
 fn capture_without_time_shows_only_the_title() {
     let env = Env::standard();
     assert_eq!(env.run(&["capture", "süt", "al"]).code(), 0);
-    assert_eq!(env.notifications(), [["--", "eklendi", "süt al"]]);
+    assert_eq!(env.notifications(), [["--", "added", "süt al"]]);
 }
 
 #[test]
@@ -293,7 +301,13 @@ fn parse_error_is_critical_and_queues_nothing() {
     assert_eq!(ran.code(), 1);
     assert_eq!(
         env.notifications(),
-        [["-u", "critical", "--", "focusdeck: eklenmedi", "başlık boş"]]
+        [[
+            "-u",
+            "critical",
+            "--",
+            "focusdeck: not added",
+            "title is empty"
+        ]]
     );
     assert!(env.drops().is_empty());
     assert!(env.queue().take_all().unwrap().is_empty());
@@ -310,10 +324,7 @@ fn crashing_plugin_queues_the_note() {
     assert_eq!(queued[0].text, "log at");
     let notes = env.notifications();
     assert_eq!(notes.len(), 1);
-    assert_eq!(
-        notes[0][..4],
-        ["-u", "critical", "--", "focusdeck: kuyruğa alındı"]
-    );
+    assert_eq!(notes[0][..4], ["-u", "critical", "--", "focusdeck: queued"]);
 }
 
 #[test]
@@ -338,7 +349,7 @@ fn successful_capture_flushes_the_queue_first() {
     assert!(!env.state_dir().join("capture-queue.jsonl").exists());
     let raw = std::fs::read_to_string(env.notify_log()).unwrap();
     assert!(
-        raw.contains("eklendi\tyeni\nkuyruktan 2 not gönderildi\t"),
+        raw.contains("added\tyeni\n2 notes sent from the queue\t"),
         "{raw}"
     );
 }
@@ -376,7 +387,7 @@ fn failed_flush_keeps_queue_and_new_note() {
 fn leading_dash_note_is_not_an_option() {
     let env = Env::standard();
     assert_eq!(env.run(&["capture", "--", "-u low not"]).code(), 0);
-    assert_eq!(env.notifications(), [["--", "eklendi", "-u low not"]]);
+    assert_eq!(env.notifications(), [["--", "added", "-u low not"]]);
 }
 
 #[test]
@@ -384,7 +395,7 @@ fn profile_without_capture_into_fails() {
     let env = Env::new("name = \"p\"\n");
     let ran = env.run(&["capture", "x"]);
     assert_eq!(ran.code(), 1);
-    assert_eq!(ran.stderr().trim(), "bu profilde capture_into yok");
+    assert_eq!(ran.stderr().trim(), "this profile has no capture_into");
     assert!(env.notifications().is_empty());
 }
 
@@ -531,4 +542,56 @@ col = 1
     env.set_mode("crash");
     env.set_reminders(&[]);
     assert_eq!(env.run(&["remind"]).code(), 0);
+}
+
+#[test]
+fn turkish_locale_keeps_turkish_output() {
+    let env = Env::new("name = \"p\"\n");
+    let ran = env.run_in(&["capture", "x"], "tr_TR.UTF-8");
+    assert_eq!(ran.code(), 1);
+    assert_eq!(ran.stderr().trim(), "bu profilde capture_into yok");
+}
+
+#[test]
+fn turkish_locale_keeps_turkish_notifications() {
+    let env = Env::standard();
+    assert_eq!(
+        env.run_in(&["capture", "@ali 14:30"], "tr_TR.UTF-8").code(),
+        1
+    );
+    assert_eq!(
+        env.notifications(),
+        [["-u", "critical", "--", "focusdeck: eklenmedi", "başlık boş"]]
+    );
+    assert_eq!(env.run_in(&["capture", "yeni"], "tr_TR.UTF-8").code(), 0);
+    assert_eq!(env.notifications()[1], ["--", "eklendi", "yeni"]);
+}
+
+#[test]
+fn config_language_overrides_env() {
+    let env = Env::new("name = \"p\"\n");
+    env.write_config("language = \"tr\"\n");
+    let ran = env.run(&["capture", "x"]);
+    assert_eq!(ran.code(), 1);
+    assert_eq!(ran.stderr().trim(), "bu profilde capture_into yok");
+}
+
+#[test]
+fn help_is_localized() {
+    let env = Env::standard();
+    assert!(env.run(&["--help"]).stdout().contains("Focus board"));
+    let tr = env.run_in(&["--help"], "tr_TR.UTF-8").stdout();
+    assert!(tr.contains("Odak panosu"), "{tr}");
+    assert!(tr.contains("Kullanılacak profil adı"), "{tr}");
+}
+
+#[test]
+fn errors_carry_a_localized_prefix() {
+    let env = Env::standard();
+    let en = env.run(&["--profile", "yok", "remind"]);
+    assert_eq!(en.code(), 1);
+    assert!(en.stderr().starts_with("error: "), "{}", en.stderr());
+    let tr = env.run_in(&["--profile", "yok", "remind"], "tr_TR.UTF-8");
+    assert!(tr.stderr().starts_with("hata: "), "{}", tr.stderr());
+    assert!(tr.stderr().contains("okunamadı"), "{}", tr.stderr());
 }

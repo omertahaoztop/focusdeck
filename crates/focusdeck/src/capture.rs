@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, TimeZone};
 use focusdeck_protocol::{Item, Link};
 
+use crate::i18n::{msg, t};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Capture {
     pub title: String,
@@ -64,7 +66,7 @@ pub fn parse(
     }
 
     if title.is_empty() {
-        return Err("başlık boş".to_owned());
+        return Err(t(msg::CAPTURE_EMPTY_TITLE));
     }
     Ok(Capture {
         title: title.join(" "),
@@ -350,8 +352,8 @@ mod tests {
 
     #[test]
     fn empty_title_is_error() {
-        assert_eq!(p("@ali 14:30").unwrap_err(), "başlık boş");
-        assert_eq!(p("   ").unwrap_err(), "başlık boş");
+        assert_eq!(p("@ali 14:30").unwrap_err(), "title is empty");
+        assert_eq!(p("   ").unwrap_err(), "title is empty");
     }
 
     #[test]

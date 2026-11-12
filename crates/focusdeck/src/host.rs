@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
+use focusdeck_i18n::Localizer;
 use focusdeck_protocol::{Describe, PROTOCOL_VERSION, Request, Response};
+
+use crate::i18n::{self, msg, t, t_args};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -15,21 +18,46 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 const BAD_LINE_LIMIT: usize = 200;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum HostError {
-    #[error("plugin başlatılamadı: {0}")]
     Spawn(String),
-    #[error("plugin 15 sn içinde cevap vermedi")]
     Timeout,
-    #[error("plugin kapandı")]
     Crashed,
-    #[error("plugin geçersiz satır yazdı: {0}")]
     BadLine(String),
-    #[error("{0}")]
     Plugin(String),
-    #[error("protokol uyuşmuyor: çekirdek {expected}, plugin {got}")]
     Protocol { expected: u32, got: u32 },
 }
+
+impl HostError {
+    pub fn localized(&self, l: &Localizer) -> String {
+        match self {
+            HostError::Spawn(error) => {
+                l.t_args(msg::HOST_SPAWN_FAILED, &[("error", error.as_str().into())])
+            }
+            HostError::Timeout => l.t(msg::HOST_TIMEOUT),
+            HostError::Crashed => l.t(msg::HOST_CRASHED),
+            HostError::BadLine(line) => {
+                l.t_args(msg::HOST_BAD_LINE, &[("line", line.as_str().into())])
+            }
+            HostError::Plugin(message) => message.clone(),
+            HostError::Protocol { expected, got } => l.t_args(
+                msg::HOST_PROTOCOL_MISMATCH,
+                &[
+                    ("expected", expected.to_string().as_str().into()),
+                    ("got", got.to_string().as_str().into()),
+                ],
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.localized(i18n::current()))
+    }
+}
+
+impl std::error::Error for HostError {}
 
 struct Proc {
     child: Child,
@@ -102,7 +130,10 @@ impl PluginHost {
                 }
                 Err(e) => {
                     proc.kill().await;
-                    Err(HostError::BadLine(format!("geçersiz sonuç: {e}")))
+                    Err(HostError::BadLine(t_args(
+                        msg::HOST_INVALID_RESULT,
+                        &[("error", e.to_string().as_str().into())],
+                    )))
                 }
             },
             Err(HostError::Plugin(message)) => {
@@ -136,8 +167,12 @@ impl PluginHost {
 
     async fn handshake(&self, proc: &mut Proc) -> Result<Describe, HostError> {
         let value = exchange(proc, "describe", Value::Null, self.timeout).await?;
-        let describe: Describe = serde_json::from_value(value)
-            .map_err(|e| HostError::BadLine(format!("geçersiz describe: {e}")))?;
+        let describe: Describe = serde_json::from_value(value).map_err(|e| {
+            HostError::BadLine(t_args(
+                msg::HOST_INVALID_DESCRIBE,
+                &[("error", e.to_string().as_str().into())],
+            ))
+        })?;
         if describe.protocol != PROTOCOL_VERSION {
             return Err(HostError::Protocol {
                 expected: PROTOCOL_VERSION,
@@ -204,7 +239,7 @@ async fn exchange(
             Ok(Some(reply)) => reply,
             Ok(None) => return Err(HostError::Crashed),
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                return Err(HostError::BadLine("UTF-8 olmayan çıktı".into()));
+                return Err(HostError::BadLine(t(msg::HOST_NON_UTF8)));
             }
             Err(_) => return Err(HostError::Crashed),
         };
@@ -262,6 +297,31 @@ mod tests {
             .get_envs()
             .find(|(key, _)| *key == "FOCUSDECK_LANG")
             .map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+    }
+
+    #[test]
+    fn tr_error_texts_unchanged() {
+        let tr = i18n::localizer(Some("tr"));
+        let cases = [
+            (HostError::Spawn("x".into()), "plugin başlatılamadı: x"),
+            (HostError::Timeout, "plugin 15 sn içinde cevap vermedi"),
+            (HostError::Crashed, "plugin kapandı"),
+            (
+                HostError::BadLine("x".into()),
+                "plugin geçersiz satır yazdı: x",
+            ),
+            (HostError::Plugin("x".into()), "x"),
+            (
+                HostError::Protocol {
+                    expected: 1,
+                    got: 2,
+                },
+                "protokol uyuşmuyor: çekirdek 1, plugin 2",
+            ),
+        ];
+        for (error, text) in cases {
+            assert_eq!(error.localized(&tr), text);
+        }
     }
 
     #[test]

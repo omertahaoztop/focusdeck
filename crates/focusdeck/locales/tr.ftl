@@ -79,3 +79,98 @@ flash-open-failed = xdg-open başlatılamadı: { $error }
 terminal-raw-mode = terminal ham kipe alınamadı
 terminal-alt-screen = alternatif ekrana geçilemedi
 terminal-event = terminal olayı okunamadı
+
+# Command line help: clap prints its own "Usage:", "Options:" and the help flag text.
+cli-about = Odak panosu
+cli-profile-help = Kullanılacak profil adı
+cli-name-value = AD
+cli-text-value = METİN
+cli-capture-about = Metni profildeki capture_into kutusuna ekler
+cli-remind-about = Yaklaşan işleri listeler
+cli-remind-send-help = Bildirimi gönder
+cli-plugin-about = Plugin kurar, listeler ve kaldırır
+cli-plugin-install-about = Dizinden plugin kurar
+cli-plugin-list-about = Kurulu plugin'leri listeler
+cli-plugin-remove-about = Plugin'i kaldırır
+
+cli-installed = { $name } { $version } kuruldu
+cli-removed = { $name } kaldırıldı
+cli-in-use-warning = uyarı: { $profile } profili bu plugin'i kullanıyor
+cli-latest = (dizinde: { $version })
+cli-not-in-registry = (dizinde: yok)
+cli-registry-unreachable = dizine ulaşılamadı
+
+error-prefix = hata:
+error-duration-invalid = geçersiz süre: { $value } (örnek: 90s, 2m, 1h)
+error-duration-zero = süre sıfır olamaz: { $value }
+error-plugin-not-installed = { $plugin } kurulu değil, focusdeck plugin install { $plugin }
+error-secret-missing = { $path } bulunamadı
+error-secret-exposed = { $path } dosyasını başkaları okuyabiliyor, chmod 600 yap
+error-secret-unreadable = { $path } denetlenemedi: { $error }
+
+config-read-failed = { $path } okunamadı
+config-invalid = { $path } geçersiz
+
+profile-read-failed = { $path } okunamadı: { $error }
+profile-parse-failed = { $path } geçersiz: { $error }
+profile-duplicate-box-id = aynı kutu kimliği iki kez: { $id }
+profile-unknown-capture-into = capture_into bilinmeyen kutuya bakıyor: { $id }
+profile-plan-into-self = { $id } kutusu kendine plan_into veremez
+profile-unknown-plan-into = plan_into bilinmeyen kutuya bakıyor: { $id }
+profile-mixed-servers = { $plugin } kutuları farklı sunuculara bakıyor: { $first }, { $second }
+profile-empty-box = { $id } kutusunun width ve height değeri en az 1 olmalı
+profile-overlapping-cells = { $first } ve { $second } kutuları aynı hücrede: satır { $row } sütun { $col }
+profile-no-profile = profil seçilmedi: --profile ver ya da config.toml'a default_profile yaz
+profile-invalid-name = geçersiz profil adı: { $name }
+
+install-invalid-name = geçersiz plugin adı: { $name }
+install-checksum-mismatch = sağlama tutmadı
+install-checksum-mismatch-named = sağlama tutmadı: { $name }
+install-file-url-relative = file:// adresi mutlak yol olmalı: { $url }
+install-read-failed = { $path } okunamadı
+install-unsupported-url = desteklenmeyen adres (yalnız http, https, file): { $url }
+install-file-too-large = dosya çok büyük
+install-too-many-redirects = çok fazla yönlendirme
+install-redirect-downgrade = https adresinden http adresine yönlendirme reddedildi
+install-http-client = HTTP istemcisi kurulamadı
+install-download-failed = { $url } indirilemedi
+install-http-status = { $url } indirilemedi: HTTP { $status }
+install-url-too-large = { $url } çok büyük
+install-index-not-utf8 = dizin UTF-8 değil
+install-index-invalid = dizin geçersiz
+install-not-found = dizinlerde böyle bir plugin yok: { $name }
+install-not-found-unreachable = dizinlerde böyle bir plugin yok: { $name } (ulaşılamayan dizinler: { $failures })
+install-protocol-mismatch = { $name } protokol { $wanted } istiyor, çekirdek { $known } biliyor
+install-no-target = { $name } için bu makineye uygun sürüm yok ({ $target })
+install-dir-create-failed = { $path } oluşturulamadı
+install-replace-failed = plugin yerine konamadı
+install-write-failed = plugin yazılamadı
+install-sync-failed = plugin diske işlenemedi
+install-chmod-failed = plugin çalıştırılabilir yapılamadı
+install-manifest-failed = manifest yazılamadı
+install-delete-failed = { $path } silinemedi
+install-not-installed = plugin kurulu değil: { $name }
+
+# Notification titles and bodies of "focusdeck capture" and the rofi prompt label.
+capture-prompt = Not
+capture-added-title = eklendi
+capture-failed-title = focusdeck: eklenmedi
+capture-queued-title = focusdeck: kuyruğa alındı
+capture-lost-title = focusdeck: not kaybolabilir
+capture-queue-flushed = kuyruktan { $count } not gönderildi
+capture-no-capture-into = bu profilde capture_into yok
+capture-empty-title = başlık boş
+capture-command-empty = capture_command boş
+capture-prompt-spawn-failed = { $program } başlatılamadı: { $error }
+capture-no-box = { $target } kutusu yok
+
+remind-write-failed = { $path } yazılamadı
+
+host-spawn-failed = plugin başlatılamadı: { $error }
+host-timeout = plugin 15 sn içinde cevap vermedi
+host-crashed = plugin kapandı
+host-bad-line = plugin geçersiz satır yazdı: { $line }
+host-protocol-mismatch = protokol uyuşmuyor: çekirdek { $expected }, plugin { $got }
+host-invalid-result = geçersiz sonuç: { $error }
+host-invalid-describe = geçersiz describe: { $error }
+host-non-utf8 = UTF-8 olmayan çıktı

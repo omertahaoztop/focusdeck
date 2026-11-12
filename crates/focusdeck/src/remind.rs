@@ -10,6 +10,7 @@ use focusdeck_protocol::{Reminder, RemindersParams, RemindersResult};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::display_safe;
+use crate::i18n::{msg, t_args};
 use crate::notify;
 use crate::paths::Paths;
 use crate::profile::Profile;
@@ -105,7 +106,10 @@ pub async fn run(
                     found.push((k, r.clone()));
                 }
             }
-            Err(e) => notify::log_line(&log, &format!("{}: hatırlatmalar alınamadı: {e}", spec.id)),
+            Err(e) => notify::log_line(
+                &log,
+                &format!("{}: could not fetch reminders: {e}", spec.id),
+            ),
         }
     }
     found.sort_by_key(|(_, r)| r.at);
@@ -122,9 +126,12 @@ pub async fn run(
     }
     if send {
         prune(&mut state, now);
-        state
-            .save(&state_path)
-            .with_context(|| format!("{} yazılamadı", state_path.display()))?;
+        state.save(&state_path).with_context(|| {
+            t_args(
+                msg::REMIND_WRITE_FAILED,
+                &[("path", state_path.display().to_string().as_str().into())],
+            )
+        })?;
     }
     Ok(found.len())
 }

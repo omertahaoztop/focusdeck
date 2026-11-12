@@ -1,10 +1,11 @@
 use crate::config::Config;
 use crate::duration;
+use crate::i18n::{self, msg};
+use focusdeck_i18n::Localizer;
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use thiserror::Error;
 
 const DEFAULT_REFRESH: Duration = Duration::from_secs(120);
 
@@ -51,45 +52,119 @@ fn refresh_from_str<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Erro
     duration::parse(&s).map_err(serde::de::Error::custom)
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum ProfileError {
-    #[error("{} okunamadı: {source}", path.display())]
     Read {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("{} geçersiz: {source}", path.display())]
     Parse {
         path: PathBuf,
         source: toml::de::Error,
     },
-    #[error("aynı kutu kimliği iki kez: {0}")]
     DuplicateBoxId(String),
-    #[error("capture_into bilinmeyen kutuya bakıyor: {0}")]
     UnknownCaptureInto(String),
-    #[error("{0} kutusu kendine plan_into veremez")]
     PlanIntoSelf(String),
-    #[error("plan_into bilinmeyen kutuya bakıyor: {0}")]
     UnknownPlanInto(String),
-    #[error("{plugin} kutuları farklı sunuculara bakıyor: {first}, {second}")]
     MixedServers {
         plugin: String,
         first: String,
         second: String,
     },
-    #[error("{0} kutusunun width ve height değeri en az 1 olmalı")]
     EmptyBox(String),
-    #[error("{first} ve {second} kutuları aynı hücrede: satır {row} sütun {col}")]
     OverlappingCells {
         first: String,
         second: String,
         row: u32,
         col: u32,
     },
-    #[error("profil seçilmedi: --profile ver ya da config.toml'a default_profile yaz")]
     NoProfileSelected,
-    #[error("geçersiz profil adı: {0:?}")]
     InvalidName(String),
+}
+
+impl ProfileError {
+    pub fn localized(&self, l: &Localizer) -> String {
+        match self {
+            ProfileError::Read { path, source } => l.t_args(
+                msg::PROFILE_READ_FAILED,
+                &[
+                    ("path", path.display().to_string().as_str().into()),
+                    ("error", source.to_string().as_str().into()),
+                ],
+            ),
+            ProfileError::Parse { path, source } => l.t_args(
+                msg::PROFILE_PARSE_FAILED,
+                &[
+                    ("path", path.display().to_string().as_str().into()),
+                    ("error", source.to_string().as_str().into()),
+                ],
+            ),
+            ProfileError::DuplicateBoxId(id) => {
+                l.t_args(msg::PROFILE_DUPLICATE_BOX_ID, &[("id", id.as_str().into())])
+            }
+            ProfileError::UnknownCaptureInto(id) => l.t_args(
+                msg::PROFILE_UNKNOWN_CAPTURE_INTO,
+                &[("id", id.as_str().into())],
+            ),
+            ProfileError::PlanIntoSelf(id) => {
+                l.t_args(msg::PROFILE_PLAN_INTO_SELF, &[("id", id.as_str().into())])
+            }
+            ProfileError::UnknownPlanInto(id) => l.t_args(
+                msg::PROFILE_UNKNOWN_PLAN_INTO,
+                &[("id", id.as_str().into())],
+            ),
+            ProfileError::MixedServers {
+                plugin,
+                first,
+                second,
+            } => l.t_args(
+                msg::PROFILE_MIXED_SERVERS,
+                &[
+                    ("plugin", plugin.as_str().into()),
+                    ("first", first.as_str().into()),
+                    ("second", second.as_str().into()),
+                ],
+            ),
+            ProfileError::EmptyBox(id) => {
+                l.t_args(msg::PROFILE_EMPTY_BOX, &[("id", id.as_str().into())])
+            }
+            ProfileError::OverlappingCells {
+                first,
+                second,
+                row,
+                col,
+            } => l.t_args(
+                msg::PROFILE_OVERLAPPING_CELLS,
+                &[
+                    ("first", first.as_str().into()),
+                    ("second", second.as_str().into()),
+                    ("row", row.to_string().as_str().into()),
+                    ("col", col.to_string().as_str().into()),
+                ],
+            ),
+            ProfileError::NoProfileSelected => l.t(msg::PROFILE_NO_PROFILE),
+            ProfileError::InvalidName(name) => l.t_args(
+                msg::PROFILE_INVALID_NAME,
+                &[("name", format!("{name:?}").as_str().into())],
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for ProfileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.localized(i18n::current()))
+    }
+}
+
+impl std::error::Error for ProfileError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ProfileError::Read { source, .. } => Some(source),
+            ProfileError::Parse { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 impl Profile {
@@ -264,7 +339,7 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
         let t = "name = \"x\"\n[[box]]\nid = \"sozlu\"\ntitle = \"a\"\nplugin = \"p\"\nrow = 0\ncol = 0\n[[box]]\nid = \"sozlu\"\ntitle = \"b\"\nplugin = \"p\"\nrow = 1\ncol = 0\n";
         assert_eq!(
             load_str(t).unwrap_err().to_string(),
-            "aynı kutu kimliği iki kez: sozlu"
+            "duplicate box id: sozlu"
         );
     }
 
@@ -273,7 +348,7 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
         let t = "name = \"x\"\ncapture_into = \"yok\"\n[[box]]\nid = \"a\"\ntitle = \"a\"\nplugin = \"p\"\nrow = 0\ncol = 0\n";
         assert_eq!(
             load_str(t).unwrap_err().to_string(),
-            "capture_into bilinmeyen kutuya bakıyor: yok"
+            "capture_into points to an unknown box: yok"
         );
     }
 
@@ -282,7 +357,7 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
         let t = "name = \"x\"\n[[box]]\nid = \"redmine\"\ntitle = \"a\"\nplugin = \"p\"\nrow = 0\ncol = 0\nplan_into = \"yok\"\n";
         assert_eq!(
             load_str(t).unwrap_err().to_string(),
-            "plan_into bilinmeyen kutuya bakıyor: yok"
+            "plan_into points to an unknown box: yok"
         );
     }
 
@@ -291,7 +366,7 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
         let t = "name = \"x\"\n[[box]]\nid = \"redmine\"\ntitle = \"a\"\nplugin = \"p\"\nrow = 0\ncol = 0\nplan_into = \"redmine\"\n";
         assert_eq!(
             load_str(t).unwrap_err().to_string(),
-            "redmine kutusu kendine plan_into veremez"
+            "box redmine cannot use itself as plan_into"
         );
     }
 
@@ -301,7 +376,7 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
             two_boxes("[[box]]\nid = \"fikir\"\ntitle = \"F\"\nplugin = \"p\"\nrow = 0\ncol = 1\n");
         assert_eq!(
             load_str(&t).unwrap_err().to_string(),
-            "sozlu ve fikir kutuları aynı hücrede: satır 0 sütun 1"
+            "boxes sozlu and fikir share a cell: row 0 column 1"
         );
     }
 
@@ -325,7 +400,7 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
         ] {
             assert_eq!(
                 load_str(&url_profile(a, b)).unwrap_err().to_string(),
-                "vikunja kutuları farklı sunuculara bakıyor: a, b",
+                "vikunja boxes point to different servers: a, b",
                 "{a:?} {b:?}"
             );
         }
@@ -354,7 +429,7 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
         let t = "name = \"x\"\n[[box]]\nid = \"a\"\ntitle = \"a\"\nplugin = \"p\"\nrow = 0\ncol = 0\nheight = 0\n";
         assert_eq!(
             load_str(t).unwrap_err().to_string(),
-            "a kutusunun width ve height değeri en az 1 olmalı"
+            "width and height of box a must be at least 1"
         );
     }
 
@@ -392,8 +467,63 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
         assert_eq!(select_name(None, None, &cfg(Some("is"))).unwrap(), "is");
         assert_eq!(
             select_name(None, None, &cfg(None)).unwrap_err().to_string(),
-            "profil seçilmedi: --profile ver ya da config.toml'a default_profile yaz"
+            "no profile selected: pass --profile or set default_profile in config.toml"
         );
+    }
+
+    #[test]
+    fn tr_error_texts_unchanged() {
+        let tr = i18n::localizer(Some("tr"));
+        let cases = [
+            (
+                ProfileError::DuplicateBoxId("a".into()),
+                "aynı kutu kimliği iki kez: a",
+            ),
+            (
+                ProfileError::UnknownCaptureInto("a".into()),
+                "capture_into bilinmeyen kutuya bakıyor: a",
+            ),
+            (
+                ProfileError::PlanIntoSelf("a".into()),
+                "a kutusu kendine plan_into veremez",
+            ),
+            (
+                ProfileError::UnknownPlanInto("a".into()),
+                "plan_into bilinmeyen kutuya bakıyor: a",
+            ),
+            (
+                ProfileError::MixedServers {
+                    plugin: "p".into(),
+                    first: "a".into(),
+                    second: "b".into(),
+                },
+                "p kutuları farklı sunuculara bakıyor: a, b",
+            ),
+            (
+                ProfileError::EmptyBox("a".into()),
+                "a kutusunun width ve height değeri en az 1 olmalı",
+            ),
+            (
+                ProfileError::OverlappingCells {
+                    first: "a".into(),
+                    second: "b".into(),
+                    row: 0,
+                    col: 1,
+                },
+                "a ve b kutuları aynı hücrede: satır 0 sütun 1",
+            ),
+            (
+                ProfileError::NoProfileSelected,
+                "profil seçilmedi: --profile ver ya da config.toml'a default_profile yaz",
+            ),
+            (
+                ProfileError::InvalidName("a/b".into()),
+                "geçersiz profil adı: \"a/b\"",
+            ),
+        ];
+        for (error, text) in cases {
+            assert_eq!(error.localized(&tr), text);
+        }
     }
 
     #[test]

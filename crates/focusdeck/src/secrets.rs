@@ -1,25 +1,60 @@
+use crate::i18n::{self, msg};
 use crate::profile::BoxSpec;
+use focusdeck_i18n::Localizer;
 use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum SecretError {
-    #[error("{} bulunamadı", .0.display())]
     Missing(PathBuf),
-    #[error("{} dosyasını başkaları okuyabiliyor, chmod 600 yap", .0.display())]
     Exposed(PathBuf),
-    #[error("{} denetlenemedi: {source}", path.display())]
     Unreadable {
         path: PathBuf,
         source: std::io::Error,
     },
 }
 
+impl SecretError {
+    pub fn localized(&self, l: &Localizer) -> String {
+        match self {
+            SecretError::Missing(path) => l.t_args(
+                msg::ERROR_SECRET_MISSING,
+                &[("path", path.display().to_string().as_str().into())],
+            ),
+            SecretError::Exposed(path) => l.t_args(
+                msg::ERROR_SECRET_EXPOSED,
+                &[("path", path.display().to_string().as_str().into())],
+            ),
+            SecretError::Unreadable { path, source } => l.t_args(
+                msg::ERROR_SECRET_UNREADABLE,
+                &[
+                    ("path", path.display().to_string().as_str().into()),
+                    ("error", source.to_string().as_str().into()),
+                ],
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for SecretError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.localized(i18n::current()))
+    }
+}
+
+impl std::error::Error for SecretError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SecretError::Unreadable { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
 /// Şifre dosyalarının yalnız varlığına ve iznine bakar, içeriğini hiç okumaz.
 pub fn plugin_config(spec: &BoxSpec, home: &Path) -> Result<Value, SecretError> {
-    let mut value = serde_json::to_value(&spec.config).expect("toml tablosu JSON'a çevrilir");
+    let mut value = serde_json::to_value(&spec.config).expect("a toml table converts to JSON");
     check_files(&mut value, home)?;
     Ok(value)
 }
@@ -121,10 +156,7 @@ mod tests {
         let err = plugin_config(&spec("token_file = \"~/s/v\""), home.path()).unwrap_err();
         assert_eq!(
             err.to_string(),
-            format!(
-                "{} dosyasını başkaları okuyabiliyor, chmod 600 yap",
-                path.display()
-            )
+            format!("{} is readable by others, run chmod 600", path.display())
         );
     }
 
@@ -141,7 +173,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("yok");
         let err = plugin_config(&spec("token_file = \"~/yok\""), home.path()).unwrap_err();
-        assert_eq!(err.to_string(), format!("{} bulunamadı", path.display()));
+        assert_eq!(err.to_string(), format!("{} not found", path.display()));
     }
 
     #[test]
@@ -199,6 +231,25 @@ mod tests {
             plugin_config(&spec("profile = \"~/yok\"\nfiles = \"~/yok\""), home.path()).unwrap();
         assert_eq!(json["profile"], "~/yok");
         assert_eq!(json["files"], "~/yok");
+    }
+
+    #[test]
+    fn tr_error_texts_unchanged() {
+        let tr = i18n::localizer(Some("tr"));
+        let path = PathBuf::from("/s/v");
+        assert_eq!(
+            SecretError::Missing(path.clone()).localized(&tr),
+            "/s/v bulunamadı"
+        );
+        assert_eq!(
+            SecretError::Exposed(path.clone()).localized(&tr),
+            "/s/v dosyasını başkaları okuyabiliyor, chmod 600 yap"
+        );
+        let source = std::io::Error::other("x");
+        assert_eq!(
+            SecretError::Unreadable { path, source }.localized(&tr),
+            "/s/v denetlenemedi: x"
+        );
     }
 
     #[test]

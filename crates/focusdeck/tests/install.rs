@@ -112,7 +112,7 @@ async fn checksum_mismatch_writes_nothing() {
     let err = install::install(&[reg_url(reg.path())], "redmine", plugins.path())
         .await
         .unwrap_err();
-    assert_eq!(err.to_string(), "sağlama tutmadı: redmine");
+    assert_eq!(err.to_string(), "checksum mismatch: redmine");
     assert!(entries(plugins.path()).is_empty());
 }
 
@@ -172,7 +172,7 @@ async fn missing_target_writes_nothing() {
     assert_eq!(
         err.to_string(),
         format!(
-            "redmine için bu makineye uygun sürüm yok ({})",
+            "no build of redmine for this machine ({})",
             current_target()
         )
     );
@@ -236,7 +236,7 @@ async fn unknown_plugin_error() {
     let err = install::install(&[url], "yok", plugins.path())
         .await
         .unwrap_err();
-    assert_eq!(err.to_string(), "dizinlerde böyle bir plugin yok: yok");
+    assert_eq!(err.to_string(), "no such plugin in the registries: yok");
 }
 
 #[tokio::test]
@@ -256,7 +256,7 @@ async fn protocol_mismatch_rejected() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "redmine protokol 2 istiyor, çekirdek 1 biliyor"
+        "redmine wants protocol 2, the core knows 1"
     );
     assert!(entries(plugins.path()).is_empty());
 }
@@ -271,7 +271,7 @@ async fn unsafe_names_are_rejected_before_any_io() {
         let err = install::install(&["file:///yok/index.toml".to_string()], bad, &plugin_dir)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("geçersiz plugin adı"), "{bad:?}");
+        assert!(err.to_string().contains("invalid plugin name"), "{bad:?}");
         assert!(install::remove(&plugin_dir, bad).is_err(), "{bad:?}");
     }
     assert!(!plugin_dir.exists());
@@ -350,7 +350,7 @@ fn remove_deletes_binary_and_manifest() {
     install::remove(plugins.path(), "redmine").unwrap();
     assert_eq!(entries(plugins.path()), ["diger"]);
     let err = install::remove(plugins.path(), "redmine").unwrap_err();
-    assert_eq!(err.to_string(), "plugin kurulu değil: redmine");
+    assert_eq!(err.to_string(), "plugin is not installed: redmine");
 }
 
 #[test]
@@ -450,7 +450,7 @@ fn plugin_install_list_remove_flow() {
 
     let (result, out, _) = run(PluginCommand::List, &paths, regs.clone());
     result.unwrap();
-    assert_eq!(out, "redmine  0.1.0  (dizinde: 0.1.0)\n");
+    assert_eq!(out, "redmine  0.1.0  (in registry: 0.1.0)\n");
 
     let (result, out, _) = run(
         PluginCommand::List,
@@ -458,7 +458,7 @@ fn plugin_install_list_remove_flow() {
         vec![reg_url(&reg.path().join("yok"))],
     );
     result.unwrap();
-    assert_eq!(out, "redmine  0.1.0  dizine ulaşılamadı\n");
+    assert_eq!(out, "redmine  0.1.0  registry unreachable\n");
 
     write_profile(&paths, "is.toml", "iş", "redmine");
     write_profile(&paths, "ev.toml", "ev", "vikunja");
@@ -471,7 +471,7 @@ fn plugin_install_list_remove_flow() {
         regs,
     );
     result.unwrap();
-    assert_eq!(err, "uyarı: iş profili bu plugin'i kullanıyor\n");
+    assert_eq!(err, "warning: profile iş uses this plugin\n");
     assert!(install::installed(&paths.plugin_dir()).is_empty());
 }
 

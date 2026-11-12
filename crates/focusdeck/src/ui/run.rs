@@ -210,9 +210,9 @@ pub fn build_host(
     install::validate_name(&spec.plugin).map_err(|e| e.to_string())?;
     let exe = paths.plugin_dir().join(&spec.plugin);
     if !exe.is_file() {
-        return Err(format!(
-            "{0} kurulu değil, focusdeck plugin install {0}",
-            spec.plugin
+        return Err(t_args(
+            msg::ERROR_PLUGIN_NOT_INSTALLED,
+            &[("plugin", spec.plugin.as_str().into())],
         ));
     }
     let config = secrets::plugin_config(spec, home).map_err(|e| e.to_string())?;
@@ -383,7 +383,7 @@ mod tests {
         let err = build_host(&paths, dir.path(), spec).err().unwrap();
         assert_eq!(
             err,
-            "vikunja kurulu değil, focusdeck plugin install vikunja"
+            "vikunja is not installed, run focusdeck plugin install vikunja"
         );
     }
 }

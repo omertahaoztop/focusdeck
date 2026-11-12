@@ -10,14 +10,12 @@ use tokio::process::Command;
 use crate::capture;
 use crate::config::Config;
 use crate::host::PluginHost;
+use crate::i18n::{self, msg, t, t_args};
 use crate::notify;
 use crate::paths::Paths;
 use crate::profile::Profile;
 use crate::queue::{Queue, Queued};
 use crate::ui::run::build_host;
-
-const FAILED_TITLE: &str = "focusdeck: eklenmedi";
-const QUEUED_TITLE: &str = "focusdeck: kuyruğa alındı";
 
 // Whatever is still in `items` when this goes away, by return, `?` or panic, lands back in the queue.
 struct Unsent<'a> {
@@ -40,7 +38,7 @@ impl Unsent<'_> {
 impl Drop for Unsent<'_> {
     fn drop(&mut self) {
         if let Err(e) = self.flush() {
-            notify::log_line(&self.log, &format!("kuyruğa yazılamadı: {e}"));
+            notify::log_line(&self.log, &format!("could not write the queue: {e}"));
         }
     }
 }
@@ -54,16 +52,16 @@ pub async fn run(
 ) -> anyhow::Result<i32> {
     let log = paths.log_file();
     let Some(target) = profile.capture_into.as_deref() else {
-        eprintln!("bu profilde capture_into yok");
+        eprintln!("{}", t(msg::CAPTURE_NO_CAPTURE_INTO));
         return Ok(1);
     };
     let text = match text {
         Some(text) => text,
-        None => match prompt(&cfg.capture_command).await {
+        None => match prompt(&capture_command(cfg)).await {
             Ok(text) if text.is_empty() => return Ok(0),
             Ok(text) => text,
             Err(e) => {
-                notify::send_logged(&log, FAILED_TITLE, &e, true);
+                notify::send_logged(&log, &t(msg::CAPTURE_FAILED_TITLE), &e, true);
                 return Ok(1);
             }
         },
@@ -73,7 +71,7 @@ pub async fn run(
     let parsed = match parse(profile, &text, now) {
         Ok(parsed) => parsed,
         Err(e) => {
-            notify::send_logged(&log, FAILED_TITLE, &e, true);
+            notify::send_logged(&log, &t(msg::CAPTURE_FAILED_TITLE), &e, true);
             return Ok(1);
         }
     };
@@ -86,7 +84,7 @@ pub async fn run(
     let mut pending = match queue.take_all() {
         Ok(taken) => taken,
         Err(e) => {
-            notify::log_line(&log, &format!("kuyruk okunamadı: {e}"));
+            notify::log_line(&log, &format!("could not read the queue: {e}"));
             Vec::new()
         }
     };
@@ -104,19 +102,28 @@ pub async fn run(
     match (outcome, flushed) {
         (Ok(()), _) => {
             let body = if queued_before > 0 {
-                format!("{shown}\nkuyruktan {queued_before} not gönderildi")
+                format!(
+                    "{shown}\n{}",
+                    t_args(
+                        msg::CAPTURE_QUEUE_FLUSHED,
+                        &[("count", queued_before.into())]
+                    )
+                )
             } else {
                 shown
             };
-            notify::send_logged(&log, "eklendi", &body, false);
+            notify::send_logged(&log, &t(msg::CAPTURE_ADDED_TITLE), &body, false);
         }
         (Err(e), Ok(())) => {
             notify::log_line(&log, &format!("{target}: {e}"));
-            notify::send_logged(&log, QUEUED_TITLE, &e, true);
+            notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &e, true);
         }
         (Err(e), Err(io)) => {
-            notify::log_line(&log, &format!("{target}: {e}; kuyruğa yazılamadı: {io}"));
-            notify::send_logged(&log, "focusdeck: not kaybolabilir", &io.to_string(), true);
+            notify::log_line(
+                &log,
+                &format!("{target}: {e}; could not write the queue: {io}"),
+            );
+            notify::send_logged(&log, &t(msg::CAPTURE_LOST_TITLE), &io.to_string(), true);
         }
     }
     Ok(i32::from(failed))
@@ -135,17 +142,39 @@ fn parse(
     )
 }
 
+fn capture_command(cfg: &Config) -> Vec<String> {
+    cfg.capture_command
+        .clone()
+        .unwrap_or_else(|| default_prompt(i18n::current()))
+}
+
+fn default_prompt(l: &focusdeck_i18n::Localizer) -> Vec<String> {
+    ["rofi", "-dmenu", "-p"]
+        .map(String::from)
+        .into_iter()
+        .chain([l.t(msg::CAPTURE_PROMPT)])
+        .collect()
+}
+
 async fn prompt(command: &[String]) -> Result<String, String> {
     let (program, args) = command
         .split_first()
-        .ok_or_else(|| "capture_command boş".to_owned())?;
+        .ok_or_else(|| t(msg::CAPTURE_COMMAND_EMPTY))?;
     let output = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stderr(Stdio::inherit())
         .output()
         .await
-        .map_err(|e| format!("{program} başlatılamadı: {e}"))?;
+        .map_err(|e| {
+            t_args(
+                msg::CAPTURE_PROMPT_SPAWN_FAILED,
+                &[
+                    ("program", program.as_str().into()),
+                    ("error", e.to_string().as_str().into()),
+                ],
+            )
+        })?;
     // a cancelled prompt (rofi Esc) prints nothing, which the caller treats as no note
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -165,7 +194,7 @@ async fn deliver(
     let spec = profile
         .box_index(target)
         .map(|i| &profile.boxes[i])
-        .ok_or_else(|| format!("{target} kutusu yok"))?;
+        .ok_or_else(|| t_args(msg::CAPTURE_NO_BOX, &[("target", target.into())]))?;
     let home = dirs::home_dir().unwrap_or_default();
     let mut host: PluginHost = build_host(paths, &home, spec)?;
     while let Some(entry) = unsent.items.first() {
@@ -179,9 +208,38 @@ async fn deliver(
                     .await
                     .map_err(|e| e.to_string())?;
             }
-            Err(e) => notify::log_line(log, &format!("kuyruktaki not atlandı: {e}")),
+            Err(e) => notify::log_line(log, &format!("skipped a queued note: {e}")),
         }
         unsent.items.remove(0);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n;
+
+    #[test]
+    fn queue_flushed_text_follows_the_language() {
+        let count = |l: &focusdeck_i18n::Localizer, n: usize| {
+            l.t_args(msg::CAPTURE_QUEUE_FLUSHED, &[("count", n.into())])
+        };
+        let (tr, en) = (i18n::localizer(Some("tr")), i18n::localizer(None));
+        assert_eq!(count(&tr, 2), "kuyruktan 2 not gönderildi");
+        assert_eq!(count(&en, 1), "1 note sent from the queue");
+        assert_eq!(count(&en, 2), "2 notes sent from the queue");
+    }
+
+    #[test]
+    fn default_prompt_is_localized() {
+        assert_eq!(
+            default_prompt(&i18n::localizer(Some("tr"))),
+            ["rofi", "-dmenu", "-p", "Not"]
+        );
+        assert_eq!(
+            default_prompt(&i18n::localizer(None)),
+            ["rofi", "-dmenu", "-p", "Note"]
+        );
+    }
 }

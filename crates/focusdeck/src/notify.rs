@@ -23,11 +23,11 @@ pub fn send_logged(log: &Path, title: &str, body: &str, critical: bool) -> bool 
     match cmd.status() {
         Ok(status) if status.success() => true,
         Ok(status) => {
-            log_line(log, &format!("notify-send {status} ile çıktı"));
+            log_line(log, &format!("notify-send exited with {status}"));
             false
         }
         Err(e) => {
-            log_line(log, &format!("notify-send başlatılamadı: {e}"));
+            log_line(log, &format!("could not start notify-send: {e}"));
             false
         }
     }

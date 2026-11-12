@@ -1,3 +1,4 @@
+use crate::i18n::{msg, t_args};
 use crate::paths::Paths;
 use anyhow::Context;
 use serde::Deserialize;
@@ -28,7 +29,7 @@ pub struct Config {
     pub capture_words: CaptureWords,
     pub default_profile: Option<String>,
     pub registries: Vec<String>,
-    pub capture_command: Vec<String>,
+    pub capture_command: Option<Vec<String>>,
 }
 
 impl Default for Config {
@@ -38,7 +39,7 @@ impl Default for Config {
             capture_words: CaptureWords::default(),
             default_profile: None,
             registries: vec![DEFAULT_REGISTRY.to_string()],
-            capture_command: ["rofi", "-dmenu", "-p", "Not"].map(String::from).to_vec(),
+            capture_command: None,
         }
     }
 }
@@ -49,10 +50,14 @@ impl Config {
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Config::default()),
-            Err(e) => return Err(e).with_context(|| format!("{} okunamadı", path.display())),
+            Err(e) => return Err(e).with_context(|| path_text(msg::CONFIG_READ_FAILED, &path)),
         };
-        toml::from_str(&text).with_context(|| format!("{} geçersiz", path.display()))
+        toml::from_str(&text).with_context(|| path_text(msg::CONFIG_INVALID, &path))
     }
+}
+
+fn path_text(id: &str, path: &std::path::Path) -> String {
+    t_args(id, &[("path", path.display().to_string().as_str().into())])
 }
 
 #[cfg(test)]
@@ -98,7 +103,7 @@ mod tests {
         let cfg = Config::load(&paths(dir.path())).unwrap();
         assert_eq!(cfg.default_profile, None);
         assert_eq!(cfg.registries, vec![DEFAULT_REGISTRY.to_string()]);
-        assert_eq!(cfg.capture_command, ["rofi", "-dmenu", "-p", "Not"]);
+        assert_eq!(cfg.capture_command, None);
     }
 
     #[test]
@@ -115,7 +120,10 @@ mod tests {
             cfg.registries,
             ["https://a/index.toml", "https://b/index.toml"]
         );
-        assert_eq!(cfg.capture_command, ["fuzzel", "--dmenu"]);
+        assert_eq!(
+            cfg.capture_command,
+            Some(vec!["fuzzel".to_string(), "--dmenu".to_string()])
+        );
     }
 
     #[test]
