@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, TimeZone};
+use chrono::{
+    DateTime, Datelike, Duration, FixedOffset, Local, LocalResult, NaiveDate, NaiveDateTime,
+    Offset, TimeZone,
+};
 use focusdeck_i18n::Localizer;
 use focusdeck_protocol::{Item, Link};
 
@@ -200,6 +203,27 @@ fn parse_day(word: &str, words: &Words) -> Option<Day> {
         .find_map(|(day, list)| is(list).then_some(Day::Weekday(day)))
 }
 
+// Wall-clock times follow the local zone, DST included, while `now` still carries that zone's offset.
+fn clock_time(now: DateTime<FixedOffset>, naive: NaiveDateTime) -> Option<DateTime<FixedOffset>> {
+    let local = Local.offset_from_utc_datetime(&now.naive_utc()).fix();
+    if local == *now.offset() {
+        local_time(&Local, naive)
+    } else {
+        local_time(&now.timezone(), naive)
+    }
+}
+
+// An ambiguous time takes the earlier of its two readings; one inside a gap moves an hour later.
+fn local_time<Tz: TimeZone>(tz: &Tz, naive: NaiveDateTime) -> Option<DateTime<FixedOffset>> {
+    let map = |naive: NaiveDateTime| match tz.from_local_datetime(&naive) {
+        LocalResult::Single(t) => Some(t),
+        LocalResult::Ambiguous(a, b) => Some(a.min(b)),
+        LocalResult::None => None,
+    };
+    let found = map(naive).or_else(|| map(naive.checked_add_signed(Duration::hours(1))?))?;
+    Some(found.fixed_offset())
+}
+
 fn resolve(
     spec: &Spec,
     day: Option<Day>,
@@ -210,11 +234,7 @@ fn resolve(
         Spec::Clock { hour, minute } => (hour, minute),
     };
     let today = now.date_naive();
-    let at = |date: NaiveDate| {
-        now.timezone()
-            .from_local_datetime(&date.and_hms_opt(hour, minute, 0)?)
-            .single()
-    };
+    let at = |date: NaiveDate| clock_time(now, date.and_hms_opt(hour, minute, 0)?);
     let add_days = |date: NaiveDate, n: u64| date.checked_add_days(chrono::Days::new(n));
     match day {
         None => {
@@ -249,6 +269,116 @@ mod tests {
 
     fn at(s: &str) -> Option<DateTime<FixedOffset>> {
         Some(DateTime::parse_from_rfc3339(s).unwrap())
+    }
+
+    // +00:00 until 2026-03-08 02:00 UTC, +01:00 until 2026-10-25 01:00 UTC, +00:00 after
+    #[derive(Clone)]
+    struct Zone;
+
+    impl Zone {
+        fn spring() -> NaiveDateTime {
+            NaiveDate::from_ymd_opt(2026, 3, 8)
+                .unwrap()
+                .and_hms_opt(2, 0, 0)
+                .unwrap()
+        }
+
+        fn autumn() -> NaiveDateTime {
+            NaiveDate::from_ymd_opt(2026, 10, 25)
+                .unwrap()
+                .and_hms_opt(1, 0, 0)
+                .unwrap()
+        }
+    }
+
+    impl TimeZone for Zone {
+        type Offset = FixedOffset;
+
+        fn from_offset(_: &FixedOffset) -> Zone {
+            Zone
+        }
+
+        fn offset_from_local_date(&self, d: &NaiveDate) -> LocalResult<FixedOffset> {
+            self.offset_from_local_datetime(&d.and_hms_opt(12, 0, 0).unwrap())
+        }
+
+        fn offset_from_local_datetime(&self, l: &NaiveDateTime) -> LocalResult<FixedOffset> {
+            let hour = Duration::hours(1);
+            let (plus, zero) = (FixedOffset::east_opt(3600), FixedOffset::east_opt(0));
+            let (plus, zero) = (plus.unwrap(), zero.unwrap());
+            if *l >= Zone::spring() && *l < Zone::spring() + hour {
+                LocalResult::None
+            } else if *l >= Zone::autumn() && *l < Zone::autumn() + hour {
+                LocalResult::Ambiguous(plus, zero)
+            } else if *l >= Zone::spring() + hour && *l < Zone::autumn() {
+                LocalResult::Single(plus)
+            } else {
+                LocalResult::Single(zero)
+            }
+        }
+
+        fn offset_from_utc_date(&self, d: &NaiveDate) -> FixedOffset {
+            self.offset_from_utc_datetime(&d.and_hms_opt(12, 0, 0).unwrap())
+        }
+
+        fn offset_from_utc_datetime(&self, u: &NaiveDateTime) -> FixedOffset {
+            let summer = *u >= Zone::spring() && *u < Zone::autumn();
+            FixedOffset::east_opt(if summer { 3600 } else { 0 }).unwrap()
+        }
+    }
+
+    fn naive(s: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap()
+    }
+
+    #[test]
+    fn local_time_with_one_mapping_uses_it() {
+        assert_eq!(
+            local_time(&Zone, naive("2026-07-01 14:30"))
+                .unwrap()
+                .to_rfc3339(),
+            "2026-07-01T14:30:00+01:00"
+        );
+    }
+
+    #[test]
+    fn local_time_in_an_overlap_takes_the_earliest() {
+        assert_eq!(
+            local_time(&Zone, naive("2026-10-25 01:30"))
+                .unwrap()
+                .to_rfc3339(),
+            "2026-10-25T01:30:00+01:00"
+        );
+    }
+
+    #[test]
+    fn local_time_in_a_gap_moves_an_hour_later() {
+        assert_eq!(
+            local_time(&Zone, naive("2026-03-08 02:30"))
+                .unwrap()
+                .to_rfc3339(),
+            "2026-03-08T03:30:00+01:00"
+        );
+    }
+
+    #[test]
+    fn clock_time_in_a_foreign_offset_keeps_that_offset() {
+        // no zone has +05:07, so this can never be the local offset
+        let now = DateTime::parse_from_rfc3339("2026-11-12T10:00:00+05:07").unwrap();
+        assert_eq!(
+            clock_time(now, naive("2026-11-13 14:30"))
+                .unwrap()
+                .to_rfc3339(),
+            "2026-11-13T14:30:00+05:07"
+        );
+    }
+
+    #[test]
+    fn clock_time_in_the_local_offset_follows_the_local_zone() {
+        let now = Local::now().fixed_offset();
+        let wanted = now.date_naive().and_hms_opt(14, 30, 0).unwrap();
+        let got = clock_time(now, wanted).unwrap();
+        assert_eq!(got.naive_local(), wanted);
     }
 
     fn parse_with(text: &str, words: &Words) -> Result<Capture, String> {

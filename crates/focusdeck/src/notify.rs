@@ -28,14 +28,29 @@ pub fn send_logged(log: &Path, title: &str, body: &str, critical: bool) -> bool 
 }
 
 pub fn log_line(log: &Path, message: &str) {
-    if let Some(dir) = log.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)
-    {
+    if let Ok(mut file) = crate::private::log(log) {
         let _ = writeln!(file, "[focusdeck] {message}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn log_line_writes_an_owner_only_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("state/focusdeck.log");
+        log_line(&log, "hello");
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "[focusdeck] hello\n"
+        );
+        assert_eq!(
+            std::fs::metadata(&log).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }

@@ -168,6 +168,7 @@ capture-empty-title = başlık boş
 capture-command-empty = capture_command boş
 capture-prompt-spawn-failed = { $program } başlatılamadı: { $error }
 capture-no-box = { $target } kutusu yok
+capture-interrupted = not gönderilmeden kesildi
 
 remind-write-failed = { $path } yazılamadı
 
