@@ -51,15 +51,41 @@ pub fn spawn(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut described = false;
-        if !announce(idx, &mut host, &mut described, &tx).await {
-            return;
-        }
+        // the first command is answered with this error instead of trying the handshake a second time
+        let mut start_error = match announce(idx, &mut host, &mut described, &tx).await {
+            Announced::Ready => None,
+            Announced::Failed(error) => Some(error),
+            Announced::ReceiverGone => return,
+        };
         while let Some(cmd) = rx.recv().await {
-            if !announce(idx, &mut host, &mut described, &tx).await {
-                return;
-            }
-            let event = match cmd {
-                BoxCmd::Refresh(view) => {
+            let failure = if described {
+                None
+            } else if let Some(error) = start_error.take() {
+                Some(error)
+            } else {
+                match announce(idx, &mut host, &mut described, &tx).await {
+                    Announced::Ready => None,
+                    Announced::Failed(error) => Some(error),
+                    Announced::ReceiverGone => return,
+                }
+            };
+            let event = match (cmd, failure) {
+                (BoxCmd::Refresh(view), Some(error)) => BoxEvent::Listed {
+                    idx,
+                    view,
+                    result: Err(error),
+                },
+                (BoxCmd::Action { action, .. }, Some(error)) => BoxEvent::Finished {
+                    idx,
+                    what: action,
+                    result: Err(error),
+                },
+                (BoxCmd::Drop { .. }, Some(error)) => BoxEvent::Finished {
+                    idx,
+                    what: "drop".into(),
+                    result: Err(error),
+                },
+                (BoxCmd::Refresh(view), None) => {
                     let result = host
                         .call::<_, ListResult>("list", &ListParams { view })
                         .await
@@ -67,7 +93,7 @@ pub fn spawn(
                         .map_err(|e| e.to_string());
                     BoxEvent::Listed { idx, view, result }
                 }
-                BoxCmd::Action { item, action, args } => {
+                (BoxCmd::Action { item, action, args }, None) => {
                     let params = ActionParams {
                         item,
                         action: action.clone(),
@@ -84,7 +110,7 @@ pub fn spawn(
                         result,
                     }
                 }
-                BoxCmd::Drop { item, from } => {
+                (BoxCmd::Drop { item, from }, None) => {
                     let result = host
                         .call::<_, Item>("drop", &DropParams { item, from })
                         .await
@@ -104,20 +130,26 @@ pub fn spawn(
     })
 }
 
-// false means the event receiver is gone and the worker should stop
+enum Announced {
+    Ready,
+    Failed(String),
+    ReceiverGone,
+}
+
 async fn announce(
     idx: usize,
     host: &mut PluginHost,
     described: &mut bool,
     tx: &mpsc::Sender<BoxEvent>,
-) -> bool {
-    if *described {
-        return true;
+) -> Announced {
+    match host.describe().await {
+        Ok(describe) => {
+            *described = true;
+            match tx.send(BoxEvent::Described { idx, describe }).await {
+                Ok(()) => Announced::Ready,
+                Err(_) => Announced::ReceiverGone,
+            }
+        }
+        Err(e) => Announced::Failed(e.to_string()),
     }
-    // a failed describe is retried on the next command, whose own call reports the error
-    let Ok(describe) = host.describe().await else {
-        return true;
-    };
-    *described = true;
-    tx.send(BoxEvent::Described { idx, describe }).await.is_ok()
 }

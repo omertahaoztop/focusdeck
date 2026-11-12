@@ -134,7 +134,7 @@ install-read-failed = could not read { $path }
 install-unsupported-url = unsupported address (only http, https, file): { $url }
 install-file-too-large = file too large
 install-too-many-redirects = too many redirects
-install-redirect-downgrade = redirect from an https address to an http address refused
+install-insecure-url = refusing plain http (use https): { $url }
 install-http-client = could not build the HTTP client
 install-download-failed = could not download { $url }
 install-http-status = could not download { $url }: HTTP { $status }
@@ -155,6 +155,8 @@ install-delete-failed = could not delete { $path }
 install-not-installed = plugin is not installed: { $name }
 install-local-builtin = local comes with focusdeck, there is nothing to install
 install-local-not-removable = local comes with focusdeck and cannot be removed
+install-remote-file-target = the index at { $registry } points { $name } at a local file
+install-binary-changed = { $name } no longer matches its manifest; run "focusdeck plugin install { $name }" again
 
 # Notification titles and bodies of "focusdeck capture" and the rofi prompt label.
 capture-prompt = Note
@@ -184,6 +186,7 @@ host-protocol-mismatch = protocol mismatch: core { $expected }, plugin { $got }
 host-invalid-result = invalid result: { $error }
 host-invalid-describe = invalid describe: { $error }
 host-non-utf8 = output is not UTF-8
+host-line-too-long = plugin sent a line longer than 16 MiB
 
 local-file-corrupt = { $path } could not be read ({ $error }); focusdeck will not write to it
 local-file-newer = { $path } was written by a newer focusdeck (format { $version }); update focusdeck

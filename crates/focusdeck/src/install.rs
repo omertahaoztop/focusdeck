@@ -44,6 +44,11 @@ struct Manifest {
     registry: String,
 }
 
+#[derive(Deserialize)]
+struct Recorded {
+    sha256: String,
+}
+
 #[cfg(target_arch = "x86_64")]
 pub fn current_target() -> &'static str {
     "x86_64-unknown-linux-gnu"
@@ -107,10 +112,25 @@ pub async fn fetch(url: &str) -> anyhow::Result<Vec<u8>> {
             .await
             .with_context(|| t_args(msg::INSTALL_READ_FAILED, &[("path", path.into())]));
     }
-    if url.starts_with("http://") || url.starts_with("https://") {
+    if url.starts_with("https://") {
+        return fetch_http(url).await;
+    }
+    if url.starts_with("http://") {
+        let loopback = reqwest::Url::parse(url).is_ok_and(|u| is_loopback(&u));
+        if !loopback {
+            bail!(insecure(url));
+        }
         return fetch_http(url).await;
     }
     bail!(t_args(msg::INSTALL_UNSUPPORTED_URL, &[("url", url.into())]))
+}
+
+fn is_loopback(url: &reqwest::Url) -> bool {
+    matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
+}
+
+fn insecure(url: &str) -> String {
+    t_args(msg::INSTALL_INSECURE_URL, &[("url", url.into())])
 }
 
 async fn read_local(path: &Path) -> anyhow::Result<Vec<u8>> {
@@ -127,13 +147,12 @@ async fn read_local(path: &Path) -> anyhow::Result<Vec<u8>> {
 }
 
 async fn fetch_http(url: &str) -> anyhow::Result<Vec<u8>> {
-    let no_downgrade = reqwest::redirect::Policy::custom(|attempt| {
+    let https_only = reqwest::redirect::Policy::custom(|attempt| {
         if attempt.previous().len() >= 5 {
             attempt.error(t(msg::INSTALL_TOO_MANY_REDIRECTS))
-        } else if attempt.url().scheme() != "https"
-            && attempt.previous().iter().any(|u| u.scheme() == "https")
-        {
-            attempt.error(t(msg::INSTALL_REDIRECT_DOWNGRADE))
+        } else if attempt.url().scheme() == "http" && !is_loopback(attempt.url()) {
+            let message = insecure(attempt.url().as_str());
+            attempt.error(message)
         } else {
             attempt.follow()
         }
@@ -142,7 +161,7 @@ async fn fetch_http(url: &str) -> anyhow::Result<Vec<u8>> {
         .user_agent(USER_AGENT)
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
-        .redirect(no_downgrade)
+        .redirect(https_only)
         .build()
         .with_context(|| t(msg::INSTALL_HTTP_CLIENT))?;
     let mut response = client
@@ -230,6 +249,15 @@ pub async fn install(
             &[("name", name.into()), ("target", current_target().into())]
         ))
     })?;
+    if target.url.starts_with("file://") && !registry.starts_with("file://") {
+        bail!(t_args(
+            msg::INSTALL_REMOTE_FILE_TARGET,
+            &[
+                ("registry", registry.as_str().into()),
+                ("name", name.into())
+            ]
+        ));
+    }
     let bytes = fetch(&target.url).await?;
     if verify_sha256(&bytes, &target.sha256).is_err() {
         bail!(t_args(
@@ -244,27 +272,63 @@ pub async fn install(
     };
     std::fs::create_dir_all(plugin_dir)
         .with_context(|| path_text(msg::INSTALL_DIR_CREATE_FAILED, plugin_dir))?;
-    write_binary(plugin_dir, name, &bytes)?;
-    if let Err(e) = write_manifest(plugin_dir, name, &manifest) {
-        let _ = std::fs::remove_file(plugin_dir.join(name));
-        return Err(e);
-    }
+    publish(plugin_dir, name, &bytes, &manifest)?;
     Ok(entry)
 }
 
-fn write_binary(plugin_dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<()> {
-    let part = plugin_dir.join(format!(".{name}.part"));
-    let result = write_part(&part, bytes).and_then(|()| {
-        std::fs::rename(&part, plugin_dir.join(name))
-            .with_context(|| t(msg::INSTALL_REPLACE_FAILED))
-    });
-    if result.is_err() {
-        let _ = std::fs::remove_file(&part);
+// both files are staged before the first rename, and the previous binary stays linked until the manifest is in place
+fn publish(plugin_dir: &Path, name: &str, bytes: &[u8], manifest: &Manifest) -> anyhow::Result<()> {
+    let bin_part = plugin_dir.join(format!(".{name}.part"));
+    let manifest_part = plugin_dir.join(format!(".{name}.toml.part"));
+    let previous = plugin_dir.join(format!(".{name}.old"));
+    let result = stage(&bin_part, &manifest_part, bytes, manifest)
+        .and_then(|()| swap(plugin_dir, name, &bin_part, &manifest_part, &previous));
+    for leftover in [&bin_part, &manifest_part, &previous] {
+        let _ = std::fs::remove_file(leftover);
     }
     result
 }
 
-fn write_part(part: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+fn stage(
+    bin_part: &Path,
+    manifest_part: &Path,
+    bytes: &[u8],
+    manifest: &Manifest,
+) -> anyhow::Result<()> {
+    write_part(bin_part, bytes, 0o755)?;
+    let text = toml::to_string(manifest).with_context(|| t(msg::INSTALL_MANIFEST_FAILED))?;
+    write_part(manifest_part, text.as_bytes(), 0o644)
+        .with_context(|| t(msg::INSTALL_MANIFEST_FAILED))
+}
+
+fn swap(
+    plugin_dir: &Path,
+    name: &str,
+    bin_part: &Path,
+    manifest_part: &Path,
+    previous: &Path,
+) -> anyhow::Result<()> {
+    let target = plugin_dir.join(name);
+    remove_if_exists(previous)?;
+    let had_previous = match std::fs::hard_link(&target, previous) {
+        Ok(()) => true,
+        Err(e) if e.kind() == ErrorKind::NotFound => false,
+        Err(e) => return Err(e).with_context(|| t(msg::INSTALL_REPLACE_FAILED)),
+    };
+    std::fs::rename(bin_part, &target).with_context(|| t(msg::INSTALL_REPLACE_FAILED))?;
+    let manifest_path = plugin_dir.join(format!("{name}.toml"));
+    if let Err(e) = std::fs::rename(manifest_part, manifest_path) {
+        let _ = if had_previous {
+            std::fs::rename(previous, &target)
+        } else {
+            std::fs::remove_file(&target)
+        };
+        return Err(e).with_context(|| t(msg::INSTALL_MANIFEST_FAILED));
+    }
+    Ok(())
+}
+
+fn write_part(part: &Path, bytes: &[u8], mode: u32) -> anyhow::Result<()> {
     remove_if_exists(part)?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -276,33 +340,8 @@ fn write_part(part: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         .with_context(|| t(msg::INSTALL_WRITE_FAILED))?;
     file.sync_all()
         .with_context(|| t(msg::INSTALL_SYNC_FAILED))?;
-    file.set_permissions(std::fs::Permissions::from_mode(0o755))
+    file.set_permissions(std::fs::Permissions::from_mode(mode))
         .with_context(|| t(msg::INSTALL_CHMOD_FAILED))
-}
-
-fn write_manifest(plugin_dir: &Path, name: &str, manifest: &Manifest) -> anyhow::Result<()> {
-    let part = plugin_dir.join(format!(".{name}.toml.part"));
-    let text = toml::to_string(manifest).with_context(|| t(msg::INSTALL_MANIFEST_FAILED))?;
-    let result = remove_if_exists(&part)
-        .and_then(|()| {
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o644)
-                .open(&part)?;
-            file.write_all(text.as_bytes())?;
-            file.sync_all()?;
-            Ok(())
-        })
-        .and_then(|()| {
-            std::fs::rename(&part, plugin_dir.join(format!("{name}.toml")))
-                .map_err(anyhow::Error::from)
-        })
-        .with_context(|| t(msg::INSTALL_MANIFEST_FAILED));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&part);
-    }
-    result
 }
 
 fn remove_if_exists(path: &Path) -> anyhow::Result<()> {
@@ -310,6 +349,42 @@ fn remove_if_exists(path: &Path) -> anyhow::Result<()> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e).with_context(|| path_text(msg::INSTALL_DELETE_FAILED, path)),
+    }
+}
+
+pub fn verify_installed(plugin_dir: &Path, name: &str) -> anyhow::Result<()> {
+    let changed = || {
+        anyhow::anyhow!(t_args(
+            msg::INSTALL_BINARY_CHANGED,
+            &[("name", name.into())]
+        ))
+    };
+    let text = match std::fs::read_to_string(plugin_dir.join(format!("{name}.toml"))) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(changed()),
+    };
+    let recorded: Recorded = toml::from_str(&text).map_err(|_| changed())?;
+    let mut file = std::fs::File::open(plugin_dir.join(name)).map_err(|_| changed())?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        match std::io::Read::read(&mut file, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buf[..n]),
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(_) => return Err(changed()),
+        }
+    }
+    let actual: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if actual.eq_ignore_ascii_case(recorded.sha256.trim()) {
+        Ok(())
+    } else {
+        Err(changed())
     }
 }
 

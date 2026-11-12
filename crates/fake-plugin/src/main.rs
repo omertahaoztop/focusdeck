@@ -1,14 +1,14 @@
-//! Test plugin whose behaviour comes from FAKE_MODE_FILE or FAKE_MODE; configure and drop calls are appended to FAKE_LOG, reminders come from FAKE_REMINDERS_FILE, FOCUSDECK_LANG is written to FAKE_LANG_LOG at start.
+//! Test plugin driven by FAKE_MODE_FILE or FAKE_MODE (raw-* modes break the protocol); writes FAKE_LOG, FAKE_LANG_LOG, FAKE_START_LOG, FAKE_PID_LOG; reminders from FAKE_REMINDERS_FILE.
 
 use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
 use focusdeck_protocol::{
     ActionParams, Describe, DropParams, Item, ListParams, PROTOCOL_VERSION, Plugin, Reminder,
     RemindersParams, serve,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 struct Fake;
 
@@ -137,5 +137,64 @@ fn main() -> io::Result<()> {
         let lang = std::env::var("FOCUSDECK_LANG").unwrap_or_else(|_| "-".into());
         std::fs::write(path, lang)?;
     }
+    if let Ok(path) = std::env::var("FAKE_START_LOG") {
+        writeln!(
+            OpenOptions::new().create(true).append(true).open(path)?,
+            "start"
+        )?;
+    }
+    let mode = mode();
+    if mode.starts_with("raw-") {
+        return raw(&mode);
+    }
     serve(Fake, io::stdin().lock(), io::stdout())
+}
+
+// raw-* modes: answers describe and configure like serve does, then breaks the protocol on the first other request
+fn raw(mode: &str) -> io::Result<()> {
+    let mut out = io::stdout();
+    for line in io::stdin().lock().lines() {
+        let request: Value = serde_json::from_str(&line?).map_err(io::Error::other)?;
+        let id = request["id"].as_u64().unwrap_or(0);
+        let reply = match request["method"].as_str() {
+            Some("describe") => json!({"id": id, "result": Fake.describe()}),
+            Some("configure") => json!({"id": id, "result": null}),
+            _ => return misbehave(mode, id),
+        };
+        writeln!(out, "{reply}")?;
+        out.flush()?;
+    }
+    Ok(())
+}
+
+fn misbehave(mode: &str, id: u64) -> io::Result<()> {
+    let mut out = io::stdout();
+    match mode {
+        "raw-non-utf8" => out.write_all(b"\xff\xfe\n")?,
+        "raw-non-json" => writeln!(out, "not json")?,
+        "raw-long-non-json" => writeln!(out, "{}", "x".repeat(300))?,
+        "raw-wrong-id" => writeln!(out, "{}", json!({"id": id + 99, "result": {"items": []}}))?,
+        "raw-oversize" => {
+            if let Ok(path) = std::env::var("FAKE_PID_LOG") {
+                std::fs::write(path, std::process::id().to_string())?;
+            }
+            writeln!(out, "{}", "x".repeat(4096))?;
+            out.flush()?;
+            // stays alive so only the host can end it
+            std::thread::sleep(Duration::from_secs(60));
+        }
+        "raw-stderr-cr" => {
+            write!(io::stderr(), "cr-line\r\n")?;
+            writeln!(out, "{}", json!({"id": id, "result": {"items": []}}))?;
+        }
+        "raw-bad-result" => writeln!(out, "{}", json!({"id": id, "result": {"items": 5}}))?,
+        "raw-stderr-long" => {
+            let mut err = io::stderr();
+            writeln!(err, "{}", "y".repeat(100 * 1024))?;
+            writeln!(err, "after")?;
+            writeln!(out, "{}", json!({"id": id, "result": {"items": []}}))?;
+        }
+        _ => {}
+    }
+    out.flush()
 }

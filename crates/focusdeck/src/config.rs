@@ -23,7 +23,7 @@ pub struct CaptureWords {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub language: Option<String>,
     pub capture_words: CaptureWords,
@@ -132,6 +132,18 @@ mod tests {
         std::fs::write(dir.path().join("config.toml"), "default_profile = \"ev\"\n").unwrap();
         let cfg = Config::load(&paths(dir.path())).unwrap();
         assert_eq!(cfg.registries, vec![DEFAULT_REGISTRY.to_string()]);
+    }
+
+    #[test]
+    fn unknown_top_level_key_names_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "registires = [\"https://a/index.toml\"]\n",
+        )
+        .unwrap();
+        let err = Config::load(&paths(dir.path())).unwrap_err();
+        assert!(format!("{err:#}").contains("registires"), "{err:#}");
     }
 
     #[test]

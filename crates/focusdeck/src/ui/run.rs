@@ -222,6 +222,7 @@ pub fn build_host(
                 &[("plugin", spec.plugin.as_str().into())],
             ));
         }
+        install::verify_installed(&paths.plugin_dir(), &spec.plugin).map_err(|e| e.to_string())?;
         (exe, Vec::new())
     };
     let mut config = secrets::plugin_config(spec, home).map_err(|e| e.to_string())?;
