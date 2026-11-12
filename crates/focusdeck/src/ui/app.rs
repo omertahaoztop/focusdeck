@@ -57,6 +57,14 @@ pub enum Effect {
     Quit,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Drag {
+    pub from: usize,
+    pub item: Item,
+    pub x: u16,
+    pub y: u16,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Pressed {
     box_idx: usize,
@@ -74,6 +82,7 @@ pub struct App {
     return_to: Mode,
     filter: String,
     pressed: Option<Pressed>,
+    pointer: Option<(u16, u16)>,
     last_click: Option<(Pressed, Instant)>,
 }
 
@@ -133,8 +142,22 @@ impl App {
             return_to: Mode::Board,
             filter: String::new(),
             pressed: None,
+            pointer: None,
             last_click: None,
         }
+    }
+
+    /// Present only once the pointer has left the pressed cell, so a plain click never shows it.
+    pub fn drag(&self) -> Option<Drag> {
+        let (x, y) = self.pointer?;
+        let pressed = self.pressed?;
+        let item = (*self.visible(pressed.box_idx).get(pressed.row)?).clone();
+        Some(Drag {
+            from: pressed.box_idx,
+            item,
+            x,
+            y,
+        })
     }
 
     fn plan_target(&self, idx: usize) -> Option<usize> {
@@ -326,6 +349,11 @@ impl App {
             return Vec::new();
         }
         self.flash = None;
+        if key.code == KeyCode::Esc && self.pointer.is_some() {
+            self.pressed = None;
+            self.pointer = None;
+            return Vec::new();
+        }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return vec![Effect::Quit];
         }
@@ -561,6 +589,10 @@ impl App {
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => self.on_press(target, now),
             MouseEventKind::Up(MouseButton::Left) => self.on_release(target),
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.on_drag(ev.column, ev.row, target);
+                Vec::new()
+            }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 if let Some(h) = target {
                     self.focus = h.box_idx;
@@ -572,9 +604,21 @@ impl App {
         }
     }
 
+    fn on_drag(&mut self, x: u16, y: u16, target: Option<Hit>) {
+        let Some(pressed) = self.pressed else {
+            return;
+        };
+        let on_pressed_cell =
+            target.is_some_and(|h| h.box_idx == pressed.box_idx && h.row == Some(pressed.row));
+        if self.pointer.is_some() || !on_pressed_cell {
+            self.pointer = Some((x, y));
+        }
+    }
+
     fn on_press(&mut self, target: Option<Hit>, now: Instant) -> Vec<Effect> {
         self.flash = None;
         self.pressed = None;
+        self.pointer = None;
         let Some(hit) = target else {
             return Vec::new();
         };
@@ -613,6 +657,7 @@ impl App {
     }
 
     fn on_release(&mut self, target: Option<Hit>) -> Vec<Effect> {
+        self.pointer = None;
         let Some(from) = self.pressed.take() else {
             return Vec::new();
         };
@@ -1236,6 +1281,57 @@ mod tests {
             now,
             hit,
         )
+    }
+
+    fn drag_to(app: &mut App, col: u16, row: u16, now: Instant) {
+        app.on_mouse(
+            mouse(MouseEventKind::Drag(MouseButton::Left), col, row),
+            now,
+            hit,
+        );
+    }
+
+    #[test]
+    fn drag_state_appears_only_after_leaving_the_pressed_cell() {
+        let mut app = loaded_app();
+        let t = Instant::now();
+        assert_eq!(app.drag(), None);
+        down(&mut app, 21, 1, t);
+        drag_to(&mut app, 22, 1, t);
+        assert_eq!(app.drag(), None);
+        drag_to(&mut app, 3, 3, t);
+        assert_eq!(
+            app.drag(),
+            Some(Drag {
+                from: ZULIP,
+                item: item("z1", "zulip mesajı"),
+                x: 3,
+                y: 3
+            })
+        );
+        drag_to(&mut app, 22, 1, t);
+        assert!(app.drag().is_some());
+        up(&mut app, 3, 3, t);
+        assert_eq!(app.drag(), None);
+    }
+
+    #[test]
+    fn escape_cancels_a_drag_without_dropping() {
+        let mut app = loaded_app();
+        let t = Instant::now();
+        down(&mut app, 21, 1, t);
+        drag_to(&mut app, 3, 3, t);
+        assert!(app.on_key(code(KeyCode::Esc)).is_empty());
+        assert_eq!(app.drag(), None);
+        assert!(up(&mut app, 3, 3, t).is_empty());
+        assert_eq!(app.mode, Mode::Board);
+    }
+
+    #[test]
+    fn drag_without_press_is_ignored() {
+        let mut app = loaded_app();
+        drag_to(&mut app, 3, 3, Instant::now());
+        assert_eq!(app.drag(), None);
     }
 
     #[test]

@@ -5,10 +5,10 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::app::{App, BoxState, Mode};
+use super::app::{App, BoxState, Drag, Mode};
 use super::{hint, layout};
 use crate::cli::display_safe;
 use focusdeck_protocol::Item;
@@ -62,10 +62,15 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: DateTime<Local>) {
         bottom,
     );
     let focus = app.zoomed_box().unwrap_or(app.focus);
+    let drag = app.drag();
     for (idx, rect) in layout::frame_rects(area, app).into_iter().enumerate() {
         if !rect.is_empty() {
-            draw_box(frame, app, idx, rect, idx == focus, now);
+            let target = drag.as_ref().is_some_and(|d| accepts_drop(app, d, idx));
+            draw_box(frame, app, idx, rect, idx == focus, target, now);
         }
+    }
+    if let Some(drag) = &drag {
+        draw_drag(frame, area, drag);
     }
     match &app.mode {
         Mode::Capture { input } => draw_capture(frame, body, input),
@@ -136,16 +141,52 @@ fn box_title(app: &App, idx: usize, now: DateTime<Local>) -> String {
     title
 }
 
+fn accepts_drop(app: &App, drag: &Drag, idx: usize) -> bool {
+    let describe = app.boxes[idx].describe.as_ref();
+    if idx == drag.from {
+        describe.is_some_and(|d| d.actions.iter().any(|a| a == "reorder"))
+    } else {
+        describe.is_some_and(|d| d.accepts_drop)
+    }
+}
+
+fn draw_drag(frame: &mut Frame, area: Rect, drag: &Drag) {
+    let title = display_safe(&drag.item.title);
+    let width = (title.width() as u16)
+        .saturating_add(2)
+        .clamp(8, 32)
+        .min(area.width);
+    let height = 3.min(area.height);
+    let x = drag
+        .x
+        .saturating_add(1)
+        .min(area.right().saturating_sub(width));
+    let y = drag
+        .y
+        .saturating_add(1)
+        .min(area.bottom().saturating_sub(height));
+    let rect = Rect::new(x, y, width, height);
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .border_type(BorderType::LightDoubleDashed)
+        .border_style(Style::new().fg(Color::Yellow));
+    let text = truncate(&title, usize::from(width.saturating_sub(2)));
+    frame.render_widget(Paragraph::new(text).block(block), rect);
+}
+
 fn draw_box(
     frame: &mut Frame,
     app: &App,
     idx: usize,
     rect: Rect,
     focused: bool,
+    drop_target: bool,
     now: DateTime<Local>,
 ) {
     let state = &app.boxes[idx];
-    let border = if focused {
+    let border = if drop_target {
+        Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else if focused {
         Style::new().fg(Color::Cyan)
     } else {
         Style::new().fg(Color::DarkGray)
@@ -307,9 +348,12 @@ mod tests {
     use super::super::hint;
     use super::*;
     use chrono::{Duration, TimeZone};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier};
+    use std::time::Instant;
     use unicode_width::UnicodeWidthStr;
 
     fn now() -> DateTime<Local> {
@@ -494,5 +538,82 @@ mod tests {
         };
         let term = render(&app, 60, 10);
         find(&term, "sonuncu▏");
+    }
+
+    fn mouse(kind: MouseEventKind, x: u16, y: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn pointer(app: &mut App, kind: MouseEventKind, x: u16, y: u16) {
+        let rects = layout::frame_rects(Rect::new(0, 0, 120, 40), app);
+        let target = layout::hit(&rects, app, x, y);
+        app.on_mouse(mouse(kind, x, y), Instant::now(), |_, _| target);
+    }
+
+    fn press_zulip_first_item(app: &mut App) {
+        pointer(app, MouseEventKind::Down(MouseButton::Left), 81, 2);
+    }
+
+    #[test]
+    fn drag_draws_a_dashed_frame_with_the_item_title_at_the_pointer() {
+        let mut app = board();
+        press_zulip_first_item(&mut app);
+        pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 10, 10);
+        let term = render(&app, 120, 40);
+        let (x, y) = find(&term, "╌");
+        assert!((11..14).contains(&x) && (10..13).contains(&y), "{x},{y}");
+        let rows = rows(&term);
+        assert!(rows[usize::from(y) + 1].contains("zulip mesajı"));
+    }
+
+    #[test]
+    fn drag_frame_is_clamped_inside_the_frame() {
+        let mut app = board();
+        press_zulip_first_item(&mut app);
+        pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 119, 39);
+        let term = render(&app, 120, 40);
+        find(&term, "zulip mesajı");
+    }
+
+    #[test]
+    fn drop_targets_get_the_highlight_border() {
+        let mut app = board();
+        press_zulip_first_item(&mut app);
+        pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 10, 10);
+        let term = render(&app, 120, 40);
+        let buf = term.backend().buffer();
+        let highlighted = |x: u16| {
+            let cell = &buf[(x, 1)];
+            cell.fg == Color::Yellow && cell.modifier.contains(Modifier::BOLD)
+        };
+        assert!(highlighted(0), "sozlu kabul eder");
+        assert!(!highlighted(40), "redmine kabul etmez");
+        assert!(!highlighted(80), "zulip kaynak ve sıralama yok");
+    }
+
+    #[test]
+    fn source_box_is_highlighted_when_it_can_reorder() {
+        let mut app = board();
+        pointer(&mut app, MouseEventKind::Down(MouseButton::Left), 1, 2);
+        pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 20, 8);
+        let term = render(&app, 120, 40);
+        let cell = &term.backend().buffer()[(0, 1)];
+        assert_eq!(cell.fg, Color::Yellow);
+    }
+
+    #[test]
+    fn plain_click_shows_no_drag_frame_or_highlight() {
+        let mut app = board();
+        press_zulip_first_item(&mut app);
+        pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 82, 2);
+        pointer(&mut app, MouseEventKind::Up(MouseButton::Left), 82, 2);
+        let term = render(&app, 120, 40);
+        assert!(!rows(&term).iter().any(|r| r.contains('╌')));
+        assert_ne!(term.backend().buffer()[(0, 1)].fg, Color::Yellow);
     }
 }
