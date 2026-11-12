@@ -2,7 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use focusdeck::cli::{Cli, Command, PluginCommand, run_plugin};
+use focusdeck::cli::{Cli, Command, PluginCommand, render_error, run_plugin};
 use focusdeck::config::Config;
 use focusdeck::install::{self, current_target, sha256_hex, verify_sha256};
 use focusdeck::paths::Paths;
@@ -521,4 +521,40 @@ fn cli_parses_subcommands() {
             .command
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn rendered_errors_carry_no_control_characters() {
+    let reg = tempfile::tempdir().unwrap();
+    let plugins = tempfile::tempdir().unwrap();
+    for url in [
+        "ftp://\\u001b[2J",
+        "file://\\u001b[2J",
+        "file:///\\u001b[2J/yok",
+    ] {
+        std::fs::write(
+            reg.path().join("index.toml"),
+            format!(
+                "[[plugin]]\nname = \"redmine\"\ndescription = \"d\"\nversion = \"0.1.0\"\nprotocol = 1\n[plugin.targets.{}]\nurl = \"{url}\"\nsha256 = \"{}\"\n",
+                current_target(),
+                sha256_hex(BIN)
+            ),
+        )
+        .unwrap();
+        let err = install::install(&[reg_url(reg.path())], "redmine", plugins.path())
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains('\u{1b}'),
+            "{url}: kaynak hata kaçışı içermeli"
+        );
+        let text = render_error(&err);
+        assert!(!text.chars().any(char::is_control), "{url}: {text:?}");
+    }
+
+    std::fs::write(reg.path().join("index.toml"), "x = \"\u{1b}[2J\nbozuk\n").unwrap();
+    let err = install::install(&[reg_url(reg.path())], "redmine", plugins.path())
+        .await
+        .unwrap_err();
+    assert!(!render_error(&err).chars().any(char::is_control));
 }

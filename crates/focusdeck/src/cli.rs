@@ -86,6 +86,10 @@ pub async fn run_plugin(
     Ok(())
 }
 
+pub fn render_error(e: &anyhow::Error) -> String {
+    display_safe(&format!("{e:#}").replace('\n', " "))
+}
+
 async fn list(
     plugin_dir: &std::path::Path,
     config: &Config,
@@ -143,7 +147,7 @@ fn profiles_using(paths: &Paths, plugin: &str) -> Vec<String> {
 }
 
 /// Dizinden ya da profilden gelen metin terminal kaçış dizisi taşıyabilir.
-fn display_safe(text: &str) -> String {
+pub fn display_safe(text: &str) -> String {
     text.chars()
         .map(|c| if c.is_control() { '?' } else { c })
         .collect()

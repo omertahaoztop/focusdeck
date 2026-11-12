@@ -10,7 +10,7 @@ async fn main() -> ExitCode {
     match run(cli).await {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("hata: {e:#}");
+            eprintln!("hata: {}", focusdeck::cli::render_error(&e));
             ExitCode::FAILURE
         }
     }
