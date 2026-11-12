@@ -1,6 +1,7 @@
 use crate::links::{items_to_close, linked_ids, linked_item};
 use crate::profile::{BoxSpec, Profile};
 use crate::worker::BoxEvent;
+use chrono::{DateTime, Local};
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -64,6 +65,8 @@ struct Pressed {
 
 #[derive(Debug)]
 pub struct App {
+    pub profile_name: String,
+    pub refreshed_at: Option<DateTime<Local>>,
     pub boxes: Vec<BoxState>,
     pub focus: usize,
     pub mode: Mode,
@@ -110,6 +113,8 @@ fn plain_action(idx: usize, item: &str, action: &str, args: Value) -> Effect {
 impl App {
     pub fn new(profile: &Profile) -> App {
         App {
+            profile_name: profile.name.clone(),
+            refreshed_at: None,
             boxes: profile
                 .boxes
                 .iter()
@@ -272,6 +277,7 @@ impl App {
                         let state = &mut self.boxes[idx];
                         state.items = items;
                         state.error = None;
+                        self.refreshed_at = Some(Local::now());
                         self.clamp(idx);
                         effects
                     }
@@ -472,7 +478,7 @@ impl App {
         }
     }
 
-    fn picker_targets(&self, from: usize) -> Vec<usize> {
+    pub fn picker_targets(&self, from: usize) -> Vec<usize> {
         (0..self.boxes.len())
             .filter(|&i| {
                 i != from
