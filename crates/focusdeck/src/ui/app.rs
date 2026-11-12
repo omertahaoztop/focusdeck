@@ -1,5 +1,5 @@
-use crate::i18n::{self, msg, t, t_args};
-use crate::links::{items_to_close, linked_ids, linked_item};
+use crate::i18n::{msg, t, t_args};
+use crate::links::{closures_after_list, linked_ids, linked_item};
 use crate::profile::{BoxSpec, Profile};
 use crate::worker::BoxEvent;
 use chrono::{DateTime, Local};
@@ -9,6 +9,7 @@ use crossterm::event::{
 use focusdeck_protocol::{Describe, Item, Source, View};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
+use unicode_segmentation::UnicodeSegmentation;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
@@ -20,6 +21,11 @@ pub struct BoxState {
     pub error: Option<String>,
     pub selected: usize,
     pub scroll: usize,
+    /// Commands in flight, refreshes included.
+    pub pending: usize,
+    /// Item rows the box showed in the last frame; 0 until one is drawn.
+    pub rows: usize,
+    empty_lists: u8,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,7 +55,7 @@ pub struct Hit {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Effect {
-    Refresh(usize, View),
+    Refresh(usize),
     Action {
         idx: usize,
         item: String,
@@ -84,10 +90,11 @@ pub struct Drag {
     pub plan: DropPlan,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Pressed {
     box_idx: usize,
     row: usize,
+    item: String,
 }
 
 #[derive(Debug)]
@@ -98,29 +105,49 @@ pub struct App {
     pub focus: usize,
     pub mode: Mode,
     pub flash: Option<String>,
+    /// Target box and text of a capture whose drop is still in flight.
+    pub pending_capture: Option<(usize, String)>,
+    /// Box and item id armed for deletion by the first space.
+    pub confirm: Option<(usize, String)>,
     return_to: Mode,
     filter: String,
     pressed: Option<Pressed>,
     pointer: Option<(u16, u16, Option<Hit>)>,
-    last_click: Option<(Pressed, Instant)>,
-    turkish_fold: bool,
+    last_click: Option<(usize, usize, Instant)>,
 }
 
-fn fold(s: &str, turkish: bool) -> String {
-    if !turkish {
-        return s.to_lowercase();
-    }
+/// Compares `İ`, `I`, `ı` and `i` equal and ignores a combining dot above, in every UI language.
+pub fn fold(s: &str) -> String {
     s.chars()
+        .filter(|&c| c != '\u{307}')
         .flat_map(|c| match c {
-            'İ' => 'i'.to_lowercase(),
-            'I' => 'ı'.to_lowercase(),
+            'İ' | 'I' | 'ı' | 'i' => 'i'.to_lowercase(),
             c => c.to_lowercase(),
         })
         .collect()
 }
 
-fn is_turkish(lang: &str) -> bool {
-    lang.split(['-', '_']).next() == Some("tr")
+fn paste_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut broke = false;
+    for c in text.chars() {
+        if matches!(c, '\r' | '\n') {
+            if !broke {
+                out.push(' ');
+                broke = true;
+            }
+        } else if !c.is_control() {
+            out.push(c);
+            broke = false;
+        }
+    }
+    out
+}
+
+fn pop_grapheme(s: &mut String) {
+    if let Some((at, _)) = s.grapheme_indices(true).next_back() {
+        s.truncate(at);
+    }
 }
 
 fn has_action(state: &BoxState, action: &str) -> bool {
@@ -161,25 +188,33 @@ impl App {
                     error: None,
                     selected: 0,
                     scroll: 0,
+                    pending: 0,
+                    rows: 0,
+                    empty_lists: 0,
                 })
                 .collect(),
             focus: 0,
             mode: Mode::Board,
             flash: None,
+            pending_capture: None,
+            confirm: None,
             return_to: Mode::Board,
             filter: String::new(),
             pressed: None,
             pointer: None,
             last_click: None,
-            turkish_fold: is_turkish(i18n::current().lang()),
         }
     }
 
     /// Present only once the pointer has left the pressed cell, so a plain click never shows it.
     pub fn drag(&self) -> Option<Drag> {
         let (x, y, over) = self.pointer?;
-        let pressed = self.pressed?;
-        let item = (*self.visible(pressed.box_idx).get(pressed.row)?).clone();
+        let pressed = self.pressed.as_ref()?;
+        let item = self
+            .visible(pressed.box_idx)
+            .into_iter()
+            .find(|i| i.id == pressed.item)?
+            .clone();
         Some(Drag {
             from: pressed.box_idx,
             item,
@@ -189,7 +224,7 @@ impl App {
         })
     }
 
-    fn drop_plan(&self, from: Pressed, over: Option<Hit>) -> DropPlan {
+    fn drop_plan(&self, from: &Pressed, over: Option<Hit>) -> DropPlan {
         let Some(hit) = over else {
             return DropPlan::Nothing;
         };
@@ -197,9 +232,13 @@ impl App {
             if !has_action(&self.boxes[hit.box_idx], "reorder") {
                 return DropPlan::Nothing;
             }
-            let last = self.visible(hit.box_idx).len().saturating_sub(1);
+            let visible = self.visible(hit.box_idx);
+            let Some(from_row) = visible.iter().position(|i| i.id == from.item) else {
+                return DropPlan::Nothing;
+            };
+            let last = visible.len().saturating_sub(1);
             return match hit.row.map(|r| r.min(last)) {
-                Some(row) if row != from.row => DropPlan::Reorder {
+                Some(row) if row != from_row => DropPlan::Reorder {
                     idx: hit.box_idx,
                     row,
                 },
@@ -222,23 +261,30 @@ impl App {
         self.boxes.iter().position(|b| b.spec.id == target)
     }
 
+    fn query_for(&self, idx: usize) -> Option<&str> {
+        match &self.mode {
+            Mode::Search { zoom, query } if *zoom == idx => Some(query.as_str()),
+            _ if self.zoomed_box() == Some(idx) => Some(self.filter.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The search text narrowing box `idx` right now; `None` when it is empty.
+    pub fn active_filter(&self, idx: usize) -> Option<&str> {
+        self.query_for(idx).filter(|q| !q.is_empty())
+    }
+
     pub fn visible(&self, idx: usize) -> Vec<&Item> {
         let Some(state) = self.boxes.get(idx) else {
             return Vec::new();
         };
-        let query = match &self.mode {
-            Mode::Search { zoom, query } if *zoom == idx => Some(query.as_str()),
-            _ if self.zoomed_box() == Some(idx) => Some(self.filter.as_str()),
-            _ => None,
-        };
-        match query {
+        match self.query_for(idx) {
             Some(query) => {
-                let turkish = self.turkish_fold;
-                let needle = fold(query, turkish);
+                let needle = fold(query);
                 state
                     .items
                     .iter()
-                    .filter(|i| needle.is_empty() || fold(&i.title, turkish).contains(&needle))
+                    .filter(|i| needle.is_empty() || fold(&i.title).contains(&needle))
                     .collect()
             }
             None => match self.plan_target(idx) {
@@ -298,6 +344,17 @@ impl App {
     fn selected_item(&self, idx: usize) -> Option<Item> {
         let selected = self.boxes.get(idx)?.selected;
         self.visible(idx).get(selected).map(|i| (*i).clone())
+    }
+
+    fn reorder_effect(&self, idx: usize, item: &str, row: usize) -> Option<Effect> {
+        let target = self.visible(idx).get(row)?.id.clone();
+        let position = self.boxes[idx].items.iter().position(|i| i.id == target)?;
+        Some(plain_action(
+            idx,
+            item,
+            "reorder",
+            json!({ "position": position }),
+        ))
     }
 
     fn step(&mut self, idx: usize, down: bool) {
@@ -385,7 +442,23 @@ impl App {
         self.filter.clear();
         self.mode = Mode::Zoom(idx);
         self.clamp(idx);
-        vec![Effect::Refresh(idx, View::Full)]
+        vec![Effect::Refresh(idx)]
+    }
+
+    fn selection_ids(&self) -> Vec<Option<String>> {
+        (0..self.boxes.len())
+            .map(|idx| self.selected_item(idx).map(|i| i.id))
+            .collect()
+    }
+
+    fn restore_selection(&mut self, ids: Vec<Option<String>>) {
+        for (idx, id) in ids.into_iter().enumerate() {
+            let row = id.and_then(|id| self.visible(idx).iter().position(|i| i.id == id));
+            if let Some(row) = row {
+                self.boxes[idx].selected = row;
+            }
+            self.clamp(idx);
+        }
     }
 
     pub fn on_event(&mut self, ev: BoxEvent) -> Vec<Effect> {
@@ -397,63 +470,107 @@ impl App {
                 Vec::new()
             }
             BoxEvent::Listed { idx, view, result } => {
-                if idx >= self.boxes.len() {
+                let Some(state) = self.boxes.get_mut(idx) else {
                     return Vec::new();
-                }
+                };
+                state.pending = state.pending.saturating_sub(1);
                 match result {
                     Ok(items) => {
                         let effects = self.link_closures(idx, view, &items);
+                        let keep = self.selection_ids();
                         let state = &mut self.boxes[idx];
                         state.items = items;
                         state.error = None;
                         self.refreshed_at = Some(Local::now());
-                        self.clamp(idx);
+                        self.restore_selection(keep);
+                        if let Some((target, id)) = &self.confirm
+                            && !self.boxes[*target].items.iter().any(|i| i.id == *id)
+                        {
+                            self.confirm = None;
+                        }
                         effects
                     }
                     Err(message) => {
-                        self.boxes[idx].error = Some(message);
+                        let state = &mut self.boxes[idx];
+                        state.error = Some(message);
+                        state.empty_lists = 0;
                         Vec::new()
                     }
                 }
             }
-            BoxEvent::Finished { idx, what, result } => match result {
-                Ok(()) => {
-                    let view = if self.zoomed_box() == Some(idx) {
-                        View::Full
-                    } else {
-                        View::Summary
-                    };
-                    vec![Effect::Refresh(idx, view)]
+            BoxEvent::Finished { idx, what, result } => {
+                let Some(state) = self.boxes.get_mut(idx) else {
+                    return Vec::new();
+                };
+                state.pending = state.pending.saturating_sub(1);
+                let capture = self
+                    .pending_capture
+                    .take_if(|(target, _)| *target == idx && what == "drop");
+                match result {
+                    Ok(()) => vec![Effect::Refresh(idx)],
+                    Err(message) => {
+                        self.flash = Some(t_args(
+                            msg::FLASH_ACTION_FAILED,
+                            &[
+                                ("box", self.boxes[idx].spec.title.as_str().into()),
+                                ("what", what.as_str().into()),
+                                ("message", message.as_str().into()),
+                            ],
+                        ));
+                        if let Some((_, text)) = capture {
+                            self.reopen_capture(&text);
+                        }
+                        Vec::new()
+                    }
                 }
-                Err(message) => {
-                    self.flash = Some(t_args(
-                        msg::FLASH_ACTION_FAILED,
-                        &[
-                            ("what", what.as_str().into()),
-                            ("message", message.as_str().into()),
-                        ],
-                    ));
-                    Vec::new()
-                }
-            },
+            }
         }
     }
 
-    fn link_closures(&self, idx: usize, view: View, items: &[Item]) -> Vec<Effect> {
+    fn link_closures(&mut self, idx: usize, view: View, items: &[Item]) -> Vec<Effect> {
         if view != View::Full {
             return Vec::new();
         }
         let Some(target) = self.plan_target(idx) else {
             return Vec::new();
         };
-        items_to_close(
+        let mut empty_lists = self.boxes[idx].empty_lists;
+        let closing = closures_after_list(
+            &mut empty_lists,
             &self.boxes[idx].spec.plugin,
             items,
             &self.boxes[target].items,
-        )
-        .into_iter()
-        .map(|id| plain_action(target, &id, "done", json!({})))
-        .collect()
+        );
+        self.boxes[idx].empty_lists = empty_lists;
+        closing
+            .into_iter()
+            .map(|id| plain_action(target, &id, "done", json!({})))
+            .collect()
+    }
+
+    pub fn on_paste(&mut self, text: &str) -> Vec<Effect> {
+        let text = paste_text(text);
+        match &mut self.mode {
+            Mode::Capture { input } => input.push_str(&text),
+            Mode::Search { zoom, query } => {
+                query.push_str(&text);
+                let zoom = *zoom;
+                self.boxes[zoom].selected = 0;
+                self.clamp(zoom);
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    pub fn reopen_capture(&mut self, text: &str) {
+        match &mut self.mode {
+            Mode::Capture { input } if input.is_empty() => *input = text.to_owned(),
+            Mode::Capture { input } => *input = format!("{text} {input}"),
+            _ => self.enter_mode(Mode::Capture {
+                input: text.to_owned(),
+            }),
+        }
     }
 
     pub fn on_key(&mut self, key: KeyEvent) -> Vec<Effect> {
@@ -461,6 +578,9 @@ impl App {
             return Vec::new();
         }
         self.flash = None;
+        if key.code != KeyCode::Char(' ') {
+            self.confirm = None;
+        }
         if key.code == KeyCode::Esc && self.pointer.is_some() {
             self.pressed = None;
             self.pointer = None;
@@ -486,15 +606,18 @@ impl App {
     fn on_browse_key(&mut self, key: KeyEvent) -> Vec<Effect> {
         let zoomed = matches!(self.mode, Mode::Zoom(_));
         let idx = self.focus;
+        match key.code {
+            KeyCode::Char('q') => return vec![Effect::Quit],
+            KeyCode::Char('?') => {
+                self.enter_mode(Mode::Help);
+                return Vec::new();
+            }
+            _ => {}
+        }
         if idx >= self.boxes.len() {
             return Vec::new();
         }
         match key.code {
-            KeyCode::Char('q') => vec![Effect::Quit],
-            KeyCode::Char('?') => {
-                self.enter_mode(Mode::Help);
-                Vec::new()
-            }
             KeyCode::Char('a') => {
                 self.enter_mode(Mode::Capture {
                     input: String::new(),
@@ -503,6 +626,10 @@ impl App {
             }
             KeyCode::Tab if !zoomed => {
                 self.focus = (idx + 1) % self.boxes.len();
+                Vec::new()
+            }
+            KeyCode::BackTab if !zoomed => {
+                self.focus = (idx + self.boxes.len() - 1) % self.boxes.len();
                 Vec::new()
             }
             KeyCode::Left | KeyCode::Right if !zoomed => {
@@ -516,8 +643,17 @@ impl App {
                 }
                 Vec::new()
             }
+            KeyCode::Down | KeyCode::Up
+                if zoomed && key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.move_selected(idx, key.code == KeyCode::Down)
+            }
             KeyCode::Down | KeyCode::Up if zoomed => {
                 self.step(idx, key.code == KeyCode::Down);
+                Vec::new()
+            }
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End if zoomed => {
+                self.jump(idx, key.code);
                 Vec::new()
             }
             KeyCode::Down | KeyCode::Up => {
@@ -541,15 +677,7 @@ impl App {
             KeyCode::Char('x') => self.require_action(idx, "done", msg::FLASH_NO_DONE),
             KeyCode::Char('u') => self.require_action(idx, "unstar", msg::FLASH_NO_UNSTAR),
             KeyCode::Char('o') => self.open_selected(idx),
-            KeyCode::Char('m') => {
-                if let Some(item) = self.selected_item(idx) {
-                    self.enter_mode(Mode::MovePicker {
-                        from: idx,
-                        item: item.id,
-                    });
-                }
-                Vec::new()
-            }
+            KeyCode::Char('m') => self.open_picker(idx),
             KeyCode::Char(' ') if zoomed => self.toggle_plan(idx),
             _ => Vec::new(),
         }
@@ -583,15 +711,86 @@ impl App {
         let (Some(target), Some(item)) = (self.plan_target(idx), self.selected_item(idx)) else {
             return Vec::new();
         };
+        if self.boxes[target].pending > 0 {
+            return Vec::new();
+        }
         let spec = &self.boxes[idx].spec;
-        match linked_item(&self.boxes[target].items, &spec.plugin, &item.id) {
-            Some(task) => vec![plain_action(target, &task.id, "delete", json!({}))],
+        let planned = linked_item(&self.boxes[target].items, &spec.plugin, &item.id)
+            .map(|task| (task.id.clone(), task.title.clone()));
+        match planned {
+            Some((id, title)) => {
+                let armed = (target, id);
+                if self.confirm.as_ref() == Some(&armed) {
+                    self.confirm = None;
+                    vec![plain_action(target, &armed.1, "delete", json!({}))]
+                } else {
+                    self.flash = Some(t_args(
+                        msg::FLASH_CONFIRM_UNPLAN,
+                        &[
+                            ("title", title.as_str().into()),
+                            ("box", self.boxes[target].spec.title.as_str().into()),
+                        ],
+                    ));
+                    self.confirm = Some(armed);
+                    Vec::new()
+                }
+            }
             None => vec![Effect::Drop {
                 idx: target,
                 from: Some(source_of(spec, &item)),
                 item,
             }],
         }
+    }
+
+    fn open_picker(&mut self, idx: usize) -> Vec<Effect> {
+        let Some(item) = self.selected_item(idx) else {
+            return Vec::new();
+        };
+        if self.picker_targets(idx).is_empty() {
+            self.flash = Some(t(msg::FLASH_NO_MOVE_TARGET));
+            return Vec::new();
+        }
+        self.enter_mode(Mode::MovePicker {
+            from: idx,
+            item: item.id,
+        });
+        Vec::new()
+    }
+
+    fn move_selected(&mut self, idx: usize, down: bool) -> Vec<Effect> {
+        if !has_action(&self.boxes[idx], "reorder") {
+            return Vec::new();
+        }
+        let Some(item) = self.selected_item(idx) else {
+            return Vec::new();
+        };
+        let from = self.boxes[idx].selected;
+        let to = if down {
+            from + 1
+        } else {
+            let Some(to) = from.checked_sub(1) else {
+                return Vec::new();
+            };
+            to
+        };
+        if to >= self.visible(idx).len() {
+            return Vec::new();
+        }
+        self.reorder_effect(idx, &item.id, to).into_iter().collect()
+    }
+
+    fn jump(&mut self, idx: usize, code: KeyCode) {
+        let last = self.visible(idx).len().saturating_sub(1);
+        let state = &mut self.boxes[idx];
+        let page = if state.rows == 0 { 10 } else { state.rows };
+        state.selected = match code {
+            KeyCode::PageUp => state.selected.saturating_sub(page),
+            KeyCode::PageDown => (state.selected + page).min(last),
+            KeyCode::Home => 0,
+            _ => last,
+        };
+        state.scroll = state.scroll.min(state.selected);
     }
 
     fn on_capture_key(&mut self, key: KeyEvent, mut input: String) -> Vec<Effect> {
@@ -610,7 +809,7 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                input.pop();
+                pop_grapheme(&mut input);
                 self.mode = Mode::Capture { input };
                 Vec::new()
             }
@@ -678,7 +877,7 @@ impl App {
             KeyCode::Down => self.step(zoom, true),
             KeyCode::Up => self.step(zoom, false),
             KeyCode::Backspace => {
-                query.pop();
+                pop_grapheme(&mut query);
                 self.mode = Mode::Search { zoom, query };
                 self.boxes[zoom].selected = 0;
             }
@@ -726,7 +925,7 @@ impl App {
     }
 
     fn on_drag(&mut self, x: u16, y: u16, target: Option<Hit>) {
-        let Some(pressed) = self.pressed else {
+        let Some(pressed) = self.pressed.as_ref() else {
             return;
         };
         let on_pressed_cell =
@@ -748,20 +947,19 @@ impl App {
             self.last_click = None;
             return Vec::new();
         };
-        let pressed = Pressed {
-            box_idx: hit.box_idx,
-            row,
-        };
-        if row < self.visible(hit.box_idx).len() {
-            self.boxes[hit.box_idx].selected = row;
-        } else {
+        let Some(id) = self.visible(hit.box_idx).get(row).map(|i| i.id.clone()) else {
             self.last_click = None;
             return Vec::new();
-        }
-        self.pressed = Some(pressed);
-        let double = self.last_click.is_some_and(|(prev, at)| {
-            prev.box_idx == pressed.box_idx
-                && prev.row == pressed.row
+        };
+        self.boxes[hit.box_idx].selected = row;
+        self.pressed = Some(Pressed {
+            box_idx: hit.box_idx,
+            row,
+            item: id,
+        });
+        let double = self.last_click.is_some_and(|(box_idx, prev_row, at)| {
+            box_idx == hit.box_idx
+                && prev_row == row
                 && now.saturating_duration_since(at) <= DOUBLE_CLICK
         });
         if double {
@@ -773,7 +971,7 @@ impl App {
                 self.zoom(hit.box_idx)
             };
         }
-        self.last_click = Some((pressed, now));
+        self.last_click = Some((hit.box_idx, row, now));
         Vec::new()
     }
 
@@ -784,21 +982,20 @@ impl App {
         };
         let Some(item) = self
             .visible(from.box_idx)
-            .get(from.row)
-            .map(|i| (*i).clone())
+            .into_iter()
+            .find(|i| i.id == from.item)
+            .cloned()
         else {
             return Vec::new();
         };
         if target.is_some_and(|h| h.box_idx != from.box_idx || h.row != Some(from.row)) {
             self.last_click = None;
         }
-        match self.drop_plan(from, target) {
-            DropPlan::Reorder { idx, row } => vec![plain_action(
-                idx,
-                &item.id,
-                "reorder",
-                json!({ "position": row }),
-            )],
+        match self.drop_plan(&from, target) {
+            DropPlan::Reorder { idx, row } => self
+                .reorder_effect(idx, &item.id, row)
+                .into_iter()
+                .collect(),
             DropPlan::Into(idx) => vec![Effect::Drop {
                 idx,
                 from: Some(source_of(&self.boxes[from.box_idx].spec, &item)),
@@ -1001,9 +1198,8 @@ mod tests {
     }
 
     #[test]
-    fn search_is_turkish_case_insensitive() {
+    fn search_is_case_insensitive_across_turkish_and_plain_letters() {
         let mut app = loaded_app();
-        app.turkish_fold = true;
         for (query, expected) in [
             ("depo", "2"),
             ("istanbul", "1"),
@@ -1029,29 +1225,6 @@ mod tests {
                 query: query.into(),
             };
             assert_eq!(ids(&app, REDMINE), vec!["1", "2"], "query {query}");
-        }
-    }
-
-    #[test]
-    fn turkish_fold_maps_dotted_and_dotless_i() {
-        assert_eq!(fold("Iİ", true), "ıi");
-        assert_eq!(fold("Iİ", false), "ii\u{307}");
-        assert!(is_turkish("tr"));
-        assert!(is_turkish("tr-TR"));
-        assert!(!is_turkish("en"));
-    }
-
-    #[test]
-    fn turkish_search_matches_dotted_and_dotless_i() {
-        let mut app = loaded_app();
-        app.turkish_fold = true;
-        app.boxes[REDMINE].items = vec![item("1", "İş"), item("2", "Işık")];
-        for (query, expected) in [("iş", "1"), ("ışık", "2"), ("ı", "2")] {
-            app.mode = Mode::Search {
-                zoom: REDMINE,
-                query: query.into(),
-            };
-            assert_eq!(ids(&app, REDMINE), vec![expected], "query {query}");
         }
     }
 
@@ -1137,21 +1310,24 @@ mod tests {
             what: "done".into(),
             result: Ok(()),
         });
-        assert_eq!(effects, vec![Effect::Refresh(SOZLU, View::Summary)]);
+        assert_eq!(effects, vec![Effect::Refresh(SOZLU)]);
         app.mode = Mode::Zoom(SOZLU);
         let effects = app.on_event(BoxEvent::Finished {
             idx: SOZLU,
             what: "done".into(),
             result: Ok(()),
         });
-        assert_eq!(effects, vec![Effect::Refresh(SOZLU, View::Full)]);
+        assert_eq!(effects, vec![Effect::Refresh(SOZLU)]);
         let effects = app.on_event(BoxEvent::Finished {
             idx: SOZLU,
             what: "done".into(),
             result: Err("sunucu hatası".into()),
         });
         assert!(effects.is_empty());
-        assert_eq!(app.flash.as_deref(), Some("done failed: sunucu hatası"));
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("sozlu: done failed: sunucu hatası")
+        );
     }
 
     #[test]
@@ -1255,7 +1431,7 @@ mod tests {
         app.focus = ZULIP;
         assert_eq!(
             app.on_key(code(KeyCode::Enter)),
-            vec![Effect::Refresh(ZULIP, View::Full)]
+            vec![Effect::Refresh(ZULIP)]
         );
         assert_eq!(app.mode, Mode::Zoom(ZULIP));
         assert!(app.on_key(code(KeyCode::Esc)).is_empty());
@@ -1283,19 +1459,9 @@ mod tests {
 
     #[test]
     fn space_in_zoom_unplans_planned_item() {
-        let mut app = loaded_app();
-        app.focus = REDMINE;
-        app.mode = Mode::Zoom(REDMINE);
-        app.boxes[REDMINE].selected = 1;
-        assert_eq!(
-            app.on_key(key(' ')),
-            vec![Effect::Action {
-                idx: SOZLU,
-                item: "t2".into(),
-                action: "delete".into(),
-                args: json!({}),
-            }]
-        );
+        let mut app = plan_view();
+        app.on_key(key(' '));
+        assert_eq!(app.on_key(key(' ')), vec![delete_t2()]);
     }
 
     #[test]
@@ -1336,11 +1502,11 @@ mod tests {
     }
 
     #[test]
-    fn move_picker_excludes_source_and_non_accepting_boxes() {
+    fn move_picker_excludes_the_source_box() {
         let mut app = loaded_app();
-        app.focus = SOZLU;
+        app.focus = ZULIP;
         app.on_key(key('m'));
-        assert!(app.on_key(key('1')).is_empty());
+        assert!(app.on_key(key('2')).is_empty());
         assert!(matches!(app.mode, Mode::MovePicker { .. }));
         assert!(app.on_key(code(KeyCode::Esc)).is_empty());
         assert_eq!(app.mode, Mode::Board);
@@ -1587,7 +1753,7 @@ mod tests {
         down(&mut app, 21, 2, t);
         up(&mut app, 21, 2, t);
         let effects = down(&mut app, 21, 2, t + Duration::from_millis(400));
-        assert_eq!(effects, vec![Effect::Refresh(ZULIP, View::Full)]);
+        assert_eq!(effects, vec![Effect::Refresh(ZULIP)]);
         assert_eq!(app.mode, Mode::Zoom(ZULIP));
     }
 
@@ -1715,7 +1881,7 @@ mod tests {
             app.on_mouse(mouse(MouseEventKind::ScrollDown, 21, 2), t, hit);
         }
         assert_eq!(app.boxes[ZULIP].selected, 1);
-        assert!(app.boxes[ZULIP].scroll <= 1);
+        assert_eq!(app.boxes[ZULIP].scroll, 1);
         for _ in 0..6 {
             app.on_mouse(mouse(MouseEventKind::ScrollUp, 21, 2), t, hit);
         }
@@ -1724,5 +1890,444 @@ mod tests {
         list(&mut app, ZULIP, View::Full, vec![]);
         app.on_mouse(mouse(MouseEventKind::ScrollDown, 21, 2), t, hit);
         assert_eq!(app.boxes[ZULIP].selected, 0);
+    }
+
+    fn paste_into_capture(app: &mut App, text: &str) {
+        app.on_key(key('a'));
+        app.on_paste(text);
+    }
+
+    #[test]
+    fn paste_in_capture_keeps_all_lines_as_text() {
+        let mut app = loaded_app();
+        paste_into_capture(&mut app, "Call vendor\r\nreview\n\nquote\u{7}\t!");
+        assert_eq!(
+            app.on_key(code(KeyCode::Enter)),
+            vec![Effect::Capture("Call vendor review quote!".into())]
+        );
+    }
+
+    #[test]
+    fn paste_in_search_narrows_the_list() {
+        let mut app = loaded_app();
+        app.focus = REDMINE;
+        app.on_key(code(KeyCode::Enter));
+        app.on_key(key('/'));
+        app.boxes[REDMINE].selected = 2;
+        assert!(app.on_paste("dep").is_empty());
+        assert_eq!(ids(&app, REDMINE), vec!["2"]);
+        assert_eq!(app.boxes[REDMINE].selected, 0);
+        assert_eq!(app.active_filter(REDMINE), Some("dep"));
+    }
+
+    #[test]
+    fn paste_on_the_board_runs_nothing() {
+        let mut app = loaded_app();
+        let before: Vec<_> = app.boxes.iter().map(|b| b.items.clone()).collect();
+        assert!(app.on_paste("x\nq\na\n ").is_empty());
+        assert_eq!(app.mode, Mode::Board);
+        let after: Vec<_> = app.boxes.iter().map(|b| b.items.clone()).collect();
+        assert_eq!(before, after);
+        app.mode = Mode::Zoom(ZULIP);
+        assert!(app.on_paste("x\nq").is_empty());
+        assert_eq!(app.mode, Mode::Zoom(ZULIP));
+    }
+
+    fn finished(idx: usize, what: &str, result: Result<(), String>) -> BoxEvent {
+        BoxEvent::Finished {
+            idx,
+            what: what.into(),
+            result,
+        }
+    }
+
+    #[test]
+    fn failed_drop_reopens_capture_with_the_text() {
+        let mut app = loaded_app();
+        app.pending_capture = Some((SOZLU, "süt al".into()));
+        app.on_event(finished(ZULIP, "drop", Err("x".into())));
+        assert_eq!(app.mode, Mode::Board);
+        assert!(app.pending_capture.is_some());
+        app.on_event(finished(SOZLU, "drop", Err("offline".into())));
+        assert_eq!(
+            app.mode,
+            Mode::Capture {
+                input: "süt al".into()
+            }
+        );
+        assert_eq!(app.pending_capture, None);
+        assert_eq!(app.flash.as_deref(), Some("sozlu: drop failed: offline"));
+        app.on_key(code(KeyCode::Esc));
+        assert_eq!(app.mode, Mode::Board);
+    }
+
+    #[test]
+    fn successful_drop_clears_the_pending_capture() {
+        let mut app = loaded_app();
+        app.pending_capture = Some((SOZLU, "süt al".into()));
+        app.on_event(finished(SOZLU, "drop", Ok(())));
+        assert_eq!(app.pending_capture, None);
+        assert_eq!(app.mode, Mode::Board);
+    }
+
+    #[test]
+    fn reopened_capture_returns_to_the_zoom_it_came_from() {
+        let mut app = loaded_app();
+        app.mode = Mode::Zoom(SOZLU);
+        app.focus = SOZLU;
+        app.reopen_capture("not");
+        app.on_key(code(KeyCode::Esc));
+        assert_eq!(app.mode, Mode::Zoom(SOZLU));
+    }
+
+    fn plan_view() -> App {
+        let mut app = loaded_app();
+        app.focus = REDMINE;
+        app.mode = Mode::Zoom(REDMINE);
+        app.boxes[REDMINE].selected = 1;
+        app
+    }
+
+    fn delete_t2() -> Effect {
+        plain_action(SOZLU, "t2", "delete", json!({}))
+    }
+
+    #[test]
+    fn first_space_on_a_planned_item_only_asks() {
+        let mut app = plan_view();
+        assert!(app.on_key(key(' ')).is_empty());
+        assert_eq!(app.confirm, Some((SOZLU, "t2".into())));
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("space again deletes \"Depo hazırlığı\" from sozlu")
+        );
+    }
+
+    #[test]
+    fn second_space_deletes() {
+        let mut app = plan_view();
+        app.on_key(key(' '));
+        assert_eq!(app.on_key(key(' ')), vec![delete_t2()]);
+        assert_eq!(app.confirm, None);
+    }
+
+    #[test]
+    fn another_key_cancels_the_delete() {
+        let mut app = plan_view();
+        app.on_key(key(' '));
+        app.on_key(code(KeyCode::Down));
+        assert_eq!(app.confirm, None);
+        app.on_key(code(KeyCode::Up));
+        assert!(app.on_key(key(' ')).is_empty());
+        assert_eq!(app.confirm, Some((SOZLU, "t2".into())));
+    }
+
+    #[test]
+    fn an_event_that_removes_the_item_cancels_the_delete() {
+        let mut app = plan_view();
+        app.on_key(key(' '));
+        list(
+            &mut app,
+            SOZLU,
+            View::Full,
+            vec![item("t1", "birinci görev")],
+        );
+        assert_eq!(app.confirm, None);
+    }
+
+    #[test]
+    fn refresh_keeps_the_selection_on_the_same_item() {
+        let mut app = loaded_app();
+        app.focus = ZULIP;
+        app.boxes[ZULIP].selected = 1;
+        list(
+            &mut app,
+            ZULIP,
+            View::Full,
+            vec![
+                item("z0", "yeni"),
+                item("z1", "zulip mesajı"),
+                item("z2", "ikinci mesaj"),
+            ],
+        );
+        assert_eq!(app.boxes[ZULIP].selected, 2);
+        assert_eq!(app.selected_item(ZULIP).unwrap().id, "z2");
+        list(&mut app, ZULIP, View::Full, vec![item("z0", "yeni")]);
+        assert_eq!(app.boxes[ZULIP].selected, 0);
+    }
+
+    #[test]
+    fn refresh_during_drag_drops_the_item_that_was_grabbed() {
+        let mut app = loaded_app();
+        let t = Instant::now();
+        down(&mut app, 21, 1, t);
+        drag_to(&mut app, 3, 3, t);
+        list(
+            &mut app,
+            ZULIP,
+            View::Summary,
+            vec![item("z0", "yeni mesaj"), item("z1", "zulip mesajı")],
+        );
+        assert_eq!(
+            up(&mut app, 1, 3, t),
+            vec![Effect::Drop {
+                idx: SOZLU,
+                item: item("z1", "zulip mesajı"),
+                from: Some(Source {
+                    plugin: "zulip".into(),
+                    id: "z1".into()
+                }),
+            }]
+        );
+    }
+
+    #[test]
+    fn release_after_the_grabbed_item_vanished_does_nothing() {
+        let mut app = loaded_app();
+        let t = Instant::now();
+        down(&mut app, 21, 1, t);
+        list(&mut app, ZULIP, View::Summary, vec![item("z9", "başka")]);
+        assert!(up(&mut app, 1, 3, t).is_empty());
+    }
+
+    fn filtered_sozlu() -> App {
+        let mut app = loaded_app();
+        app.boxes[SOZLU].items = ["a", "b", "c", "d", "e"]
+            .iter()
+            .map(|id| {
+                let title = if "ace".contains(id) {
+                    "deploy"
+                } else {
+                    "plain"
+                };
+                item(id, &format!("{title} {id}"))
+            })
+            .collect();
+        app.mode = Mode::Zoom(SOZLU);
+        app.focus = SOZLU;
+        app.filter = "deploy".into();
+        app
+    }
+
+    #[test]
+    fn reorder_in_a_filtered_list_sends_the_full_list_position() {
+        let mut app = filtered_sozlu();
+        assert_eq!(ids(&app, SOZLU), vec!["a", "c", "e"]);
+        let t = Instant::now();
+        down(&mut app, 1, 3, t);
+        assert_eq!(
+            up(&mut app, 1, 2, t),
+            vec![plain_action(SOZLU, "e", "reorder", json!({"position": 2}))]
+        );
+        down(&mut app, 1, 1, t);
+        assert_eq!(
+            up(&mut app, 1, 3, t),
+            vec![plain_action(SOZLU, "a", "reorder", json!({"position": 4}))]
+        );
+    }
+
+    fn shift(c: KeyCode) -> KeyEvent {
+        KeyEvent::new(c, KeyModifiers::SHIFT)
+    }
+
+    #[test]
+    fn shift_arrows_reorder_the_selected_item() {
+        let mut app = loaded_app();
+        app.focus = SOZLU;
+        app.mode = Mode::Zoom(SOZLU);
+        assert!(app.on_key(shift(KeyCode::Up)).is_empty());
+        assert_eq!(
+            app.on_key(shift(KeyCode::Down)),
+            vec![plain_action(SOZLU, "t1", "reorder", json!({"position": 1}))]
+        );
+        list(
+            &mut app,
+            SOZLU,
+            View::Full,
+            vec![
+                linked("t2", "Depo hazırlığı", "redmine", "2"),
+                item("t1", "birinci görev"),
+                item("t3", "üçüncü görev"),
+            ],
+        );
+        assert_eq!(app.selected_item(SOZLU).unwrap().id, "t1");
+        assert_eq!(
+            app.on_key(shift(KeyCode::Up)),
+            vec![plain_action(SOZLU, "t1", "reorder", json!({"position": 0}))]
+        );
+        app.boxes[SOZLU].selected = 2;
+        assert!(app.on_key(shift(KeyCode::Down)).is_empty());
+        app.focus = ZULIP;
+        app.mode = Mode::Zoom(ZULIP);
+        assert!(app.on_key(shift(KeyCode::Down)).is_empty());
+    }
+
+    fn long_zoom() -> App {
+        let mut app = loaded_app();
+        app.focus = ZULIP;
+        app.mode = Mode::Zoom(ZULIP);
+        let items = (0..30).map(|i| item(&format!("n{i}"), "öğe")).collect();
+        list(&mut app, ZULIP, View::Full, items);
+        app
+    }
+
+    #[test]
+    fn page_keys_move_by_a_page() {
+        let mut app = long_zoom();
+        app.on_key(code(KeyCode::PageDown));
+        assert_eq!(app.boxes[ZULIP].selected, 10);
+        app.boxes[ZULIP].rows = 4;
+        app.on_key(code(KeyCode::PageDown));
+        assert_eq!(app.boxes[ZULIP].selected, 14);
+        app.on_key(code(KeyCode::PageUp));
+        app.on_key(code(KeyCode::PageUp));
+        app.on_key(code(KeyCode::PageUp));
+        app.on_key(code(KeyCode::PageUp));
+        assert_eq!(app.boxes[ZULIP].selected, 0);
+        app.boxes[ZULIP].selected = 28;
+        app.on_key(code(KeyCode::PageDown));
+        assert_eq!(app.boxes[ZULIP].selected, 29);
+    }
+
+    #[test]
+    fn home_and_end_jump_to_the_ends() {
+        let mut app = long_zoom();
+        app.on_key(code(KeyCode::End));
+        assert_eq!(app.boxes[ZULIP].selected, 29);
+        app.on_key(code(KeyCode::Home));
+        assert_eq!(app.boxes[ZULIP].selected, 0);
+    }
+
+    #[test]
+    fn backtab_goes_to_the_previous_box() {
+        let mut app = loaded_app();
+        app.on_key(code(KeyCode::BackTab));
+        assert_eq!(app.focus, ZULIP);
+        app.on_key(code(KeyCode::BackTab));
+        assert_eq!(app.focus, REDMINE);
+        app.mode = Mode::Zoom(REDMINE);
+        app.on_key(code(KeyCode::BackTab));
+        assert_eq!(app.focus, REDMINE);
+    }
+
+    #[test]
+    fn m_without_a_target_flashes_and_opens_nothing() {
+        let mut app = loaded_app();
+        app.focus = SOZLU;
+        assert!(app.on_key(key('m')).is_empty());
+        assert_eq!(app.mode, Mode::Board);
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("no box here accepts moved items")
+        );
+    }
+
+    #[test]
+    fn empty_profile_still_quits_and_shows_help() {
+        let mut app = App::new(&Profile {
+            boxes: vec![],
+            ..profile()
+        });
+        app.on_key(key('?'));
+        assert_eq!(app.mode, Mode::Help);
+        app.on_key(key('?'));
+        assert_eq!(app.on_key(key('q')), vec![Effect::Quit]);
+        assert!(app.on_key(code(KeyCode::Tab)).is_empty());
+    }
+
+    #[test]
+    fn fold_treats_every_i_alike() {
+        assert_eq!(fold("IŞIK"), fold("ışık"));
+        assert_eq!(fold("İstanbul"), fold("istanbul"));
+        assert_eq!(fold("Iİıi"), "iiii");
+        assert_eq!(fold("i\u{307}"), "i");
+        assert_eq!(fold("ÇĞÖÜ"), "çğöü");
+    }
+
+    #[test]
+    fn search_finds_titles_across_both_languages() {
+        let mut app = loaded_app();
+        app.boxes[REDMINE].items = vec![item("1", "issue 7"), item("2", "ISI sorunu")];
+        for (query, expected) in [("ISSUE", "1"), ("ısı", "2")] {
+            app.mode = Mode::Search {
+                zoom: REDMINE,
+                query: query.into(),
+            };
+            assert_eq!(ids(&app, REDMINE), vec![expected], "query {query}");
+        }
+    }
+
+    #[test]
+    fn active_filter_is_the_live_query_then_the_kept_filter() {
+        let mut app = loaded_app();
+        app.focus = REDMINE;
+        assert_eq!(app.active_filter(REDMINE), None);
+        app.on_key(code(KeyCode::Enter));
+        assert_eq!(app.active_filter(REDMINE), None);
+        app.on_key(key('/'));
+        assert_eq!(app.active_filter(REDMINE), None);
+        app.on_key(key('d'));
+        assert_eq!(app.active_filter(REDMINE), Some("d"));
+        assert_eq!(app.active_filter(SOZLU), None);
+        app.on_key(code(KeyCode::Enter));
+        assert_eq!(app.active_filter(REDMINE), Some("d"));
+        app.on_key(code(KeyCode::Esc));
+        assert_eq!(app.active_filter(REDMINE), None);
+    }
+
+    #[test]
+    fn backspace_removes_a_whole_grapheme() {
+        let mut app = loaded_app();
+        paste_into_capture(&mut app, "ae\u{301}");
+        app.on_key(code(KeyCode::Backspace));
+        assert_eq!(app.mode, Mode::Capture { input: "a".into() });
+        app.on_paste("\u{1F1F9}\u{1F1F7}");
+        app.on_key(code(KeyCode::Backspace));
+        assert_eq!(app.mode, Mode::Capture { input: "a".into() });
+        app.on_key(code(KeyCode::Esc));
+        app.focus = REDMINE;
+        app.on_key(code(KeyCode::Enter));
+        app.on_key(key('/'));
+        app.on_paste("e\u{301}");
+        app.on_key(code(KeyCode::Backspace));
+        assert_eq!(app.active_filter(REDMINE), None);
+    }
+
+    #[test]
+    fn double_space_plans_once() {
+        let mut app = loaded_app();
+        app.focus = REDMINE;
+        app.mode = Mode::Zoom(REDMINE);
+        app.boxes[SOZLU].pending = 1;
+        assert!(app.on_key(key(' ')).is_empty());
+        app.on_event(finished(SOZLU, "drop", Ok(())));
+        assert_eq!(app.boxes[SOZLU].pending, 0);
+        assert_eq!(app.on_key(key(' ')).len(), 1);
+    }
+
+    #[test]
+    fn pending_drops_by_one_per_result_and_never_below_zero() {
+        let mut app = loaded_app();
+        app.boxes[ZULIP].pending = 2;
+        list(&mut app, ZULIP, View::Summary, vec![]);
+        assert_eq!(app.boxes[ZULIP].pending, 1);
+        app.on_event(BoxEvent::Listed {
+            idx: ZULIP,
+            view: View::Summary,
+            result: Err("x".into()),
+        });
+        assert_eq!(app.boxes[ZULIP].pending, 0);
+        app.on_event(finished(ZULIP, "done", Ok(())));
+        assert_eq!(app.boxes[ZULIP].pending, 0);
+    }
+
+    #[test]
+    fn one_empty_list_does_not_close_linked_items_in_the_app() {
+        let mut app = loaded_app();
+        assert!(list(&mut app, REDMINE, View::Full, vec![]).is_empty());
+        assert_eq!(
+            list(&mut app, REDMINE, View::Full, vec![]),
+            vec![plain_action(SOZLU, "t2", "done", json!({}))]
+        );
     }
 }

@@ -64,7 +64,7 @@ status-refreshed = yenilendi { $time }
 status-not-refreshed = yenilenmedi
 
 # Messages flashed on the top line.
-flash-action-failed = { $what } başarısız: { $message }
+flash-action-failed = { $box }: { $what } başarısız: { $message }
 flash-no-done = bu kutuda bitirme yok
 flash-no-unstar = bu kutuda yıldız kaldırma yok
 flash-no-link = bu öğenin linki yok
@@ -75,6 +75,9 @@ flash-box-stopped = { $title } kutusunun plugin görevi durdu
 flash-no-capture-into = profilde capture_into yok
 flash-capture-failed = not eklenemedi: { $message }
 flash-open-failed = xdg-open başlatılamadı: { $error }
+flash-confirm-unplan = tekrar boşluk, "{ $title }" öğesini { $box } kutusundan siler
+flash-no-move-target = hiçbir kutu taşınan öğeyi kabul etmiyor
+flash-link-unsupported = bu tür link açılamaz: { $url }
 
 terminal-raw-mode = terminal ham kipe alınamadı
 terminal-alt-screen = alternatif ekrana geçilemedi

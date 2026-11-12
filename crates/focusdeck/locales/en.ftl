@@ -64,7 +64,7 @@ status-refreshed = refreshed { $time }
 status-not-refreshed = not refreshed yet
 
 # Messages flashed on the top line.
-flash-action-failed = { $what } failed: { $message }
+flash-action-failed = { $box }: { $what } failed: { $message }
 flash-no-done = this box has no done action
 flash-no-unstar = this box has no unstar action
 flash-no-link = this item has no link
@@ -75,6 +75,9 @@ flash-box-stopped = the plugin task of the { $title } box stopped
 flash-no-capture-into = the profile has no capture_into
 flash-capture-failed = could not add the note: { $message }
 flash-open-failed = could not start xdg-open: { $error }
+flash-confirm-unplan = space again deletes "{ $title }" from { $box }
+flash-no-move-target = no box here accepts moved items
+flash-link-unsupported = cannot open this kind of link: { $url }
 
 terminal-raw-mode = could not put the terminal in raw mode
 terminal-alt-screen = could not switch to the alternate screen
