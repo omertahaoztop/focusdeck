@@ -399,12 +399,13 @@ async fn failed_describe_reports_once_per_command() {
         .send(BoxCmd::Drop {
             item: serde_json::from_value(json!({"id": "7", "title": "t"})).unwrap(),
             from: None,
+            capture: true,
         })
         .await
         .unwrap();
     match next_event(&mut ev_rx).await {
         BoxEvent::Finished { what, result, .. } => {
-            assert_eq!(what, "drop");
+            assert_eq!(what, "capture");
             assert_eq!(result.unwrap_err(), "protocol mismatch: core 1, plugin 0");
         }
         other => panic!("Finished bekleniyordu: {other:?}"),
@@ -525,17 +526,21 @@ async fn worker_runs_action_and_drop() {
         }
         other => panic!("Finished bekleniyordu: {other:?}"),
     }
-    let item: Item = serde_json::from_value(json!({"id": "7", "title": "t"})).unwrap();
-    cmd_tx
-        .send(BoxCmd::Drop { item, from: None })
-        .await
-        .unwrap();
-    match next_event(&mut ev_rx).await {
-        BoxEvent::Finished { what, result, .. } => {
-            assert_eq!(what, "drop");
-            assert!(result.is_ok());
+    for (capture, name) in [(false, "drop"), (true, "capture")] {
+        let item: Item = serde_json::from_value(json!({"id": "7", "title": "t"})).unwrap();
+        let cmd = BoxCmd::Drop {
+            item,
+            from: None,
+            capture,
+        };
+        cmd_tx.send(cmd).await.unwrap();
+        match next_event(&mut ev_rx).await {
+            BoxEvent::Finished { what, result, .. } => {
+                assert_eq!(what, name);
+                assert!(result.is_ok());
+            }
+            other => panic!("Finished bekleniyordu: {other:?}"),
         }
-        other => panic!("Finished bekleniyordu: {other:?}"),
     }
     drop(cmd_tx);
     handle.await.unwrap();

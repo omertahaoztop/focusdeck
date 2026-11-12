@@ -22,6 +22,7 @@ pub enum BoxCmd {
     Drop {
         item: Item,
         from: Option<Source>,
+        capture: bool,
     },
 }
 
@@ -80,9 +81,9 @@ pub fn spawn(
                     what: action,
                     result: Err(error),
                 },
-                (BoxCmd::Drop { .. }, Some(error)) => BoxEvent::Finished {
+                (BoxCmd::Drop { capture, .. }, Some(error)) => BoxEvent::Finished {
                     idx,
-                    what: "drop".into(),
+                    what: drop_name(capture).into(),
                     result: Err(error),
                 },
                 (BoxCmd::Refresh(view), None) => {
@@ -110,7 +111,14 @@ pub fn spawn(
                         result,
                     }
                 }
-                (BoxCmd::Drop { item, from }, None) => {
+                (
+                    BoxCmd::Drop {
+                        item,
+                        from,
+                        capture,
+                    },
+                    None,
+                ) => {
                     let result = host
                         .call::<_, Item>("drop", &DropParams { item, from })
                         .await
@@ -118,7 +126,7 @@ pub fn spawn(
                         .map_err(|e| e.to_string());
                     BoxEvent::Finished {
                         idx,
-                        what: "drop".into(),
+                        what: drop_name(capture).into(),
                         result,
                     }
                 }
@@ -128,6 +136,11 @@ pub fn spawn(
             }
         }
     })
+}
+
+// A typed note reports under its own name, so its result is never taken for that of a moved item.
+fn drop_name(capture: bool) -> &'static str {
+    if capture { "capture" } else { "drop" }
 }
 
 enum Announced {

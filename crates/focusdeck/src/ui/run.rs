@@ -148,7 +148,12 @@ impl Runtime<'_> {
                 self.send(app, idx, BoxCmd::Action { item, action, args });
             }
             Effect::Drop { idx, item, from } => {
-                self.send(app, idx, BoxCmd::Drop { item, from });
+                let cmd = BoxCmd::Drop {
+                    item,
+                    from,
+                    capture: false,
+                };
+                self.send(app, idx, cmd);
             }
             Effect::Open(url) => open_url(app, &url),
             Effect::Capture(text) => self.capture(app, &text),
@@ -180,9 +185,10 @@ impl Runtime<'_> {
                 let cmd = BoxCmd::Drop {
                     item: parsed.into_item(),
                     from: None,
+                    capture: true,
                 };
                 if self.send(app, target, cmd) {
-                    app.pending_capture = Some((target, text.to_owned()));
+                    app.pending_capture.push_back((target, text.to_owned()));
                 } else {
                     app.reopen_capture(text);
                 }
@@ -606,7 +612,7 @@ mod tests {
                 input: "süt al".into()
             }
         );
-        assert_eq!(app.pending_capture, None);
+        assert!(app.pending_capture.is_empty());
         assert_eq!(app.flash.as_deref(), Some("redmine box is busy"));
     }
 
@@ -618,11 +624,15 @@ mod tests {
         let mut app = capture_app(&profile);
         submit(&rt, &mut app);
         assert_eq!(app.mode, Mode::Board);
-        assert_eq!(app.pending_capture, Some((0, "süt al".into())));
+        assert_eq!(app.pending_capture, [(0, "süt al".into())]);
         assert_eq!(app.boxes[0].pending, 1);
         match rx.try_recv().unwrap() {
-            BoxCmd::Drop { item, from } => {
-                assert_eq!((item.title.as_str(), from), ("süt al", None));
+            BoxCmd::Drop {
+                item,
+                from,
+                capture,
+            } => {
+                assert_eq!((item.title.as_str(), from, capture), ("süt al", None, true));
             }
             other => panic!("{other:?}"),
         }

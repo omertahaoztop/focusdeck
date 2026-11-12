@@ -8,6 +8,7 @@ use crossterm::event::{
 };
 use focusdeck_protocol::{Describe, Item, Source, View};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -105,8 +106,8 @@ pub struct App {
     pub focus: usize,
     pub mode: Mode,
     pub flash: Option<String>,
-    /// Target box and text of a capture whose drop is still in flight.
-    pub pending_capture: Option<(usize, String)>,
+    /// Target box and text of every capture still in flight, oldest first.
+    pub pending_capture: VecDeque<(usize, String)>,
     /// Box and item id armed for deletion by the first space.
     pub confirm: Option<(usize, String)>,
     return_to: Mode,
@@ -196,7 +197,7 @@ impl App {
             focus: 0,
             mode: Mode::Board,
             flash: None,
-            pending_capture: None,
+            pending_capture: VecDeque::new(),
             confirm: None,
             return_to: Mode::Board,
             filter: String::new(),
@@ -503,9 +504,12 @@ impl App {
                     return Vec::new();
                 };
                 state.pending = state.pending.saturating_sub(1);
+                // One box answers in the order it was asked, so the oldest capture owns this result.
                 let capture = self
                     .pending_capture
-                    .take_if(|(target, _)| *target == idx && what == "drop");
+                    .iter()
+                    .position(|(target, _)| *target == idx && what == "capture")
+                    .and_then(|at| self.pending_capture.remove(at));
                 match result {
                     Ok(()) => vec![Effect::Refresh(idx)],
                     Err(message) => {
@@ -1942,32 +1946,41 @@ mod tests {
     }
 
     #[test]
-    fn failed_drop_reopens_capture_with_the_text() {
+    fn failed_capture_reopens_the_field_with_its_text() {
         let mut app = loaded_app();
-        app.pending_capture = Some((SOZLU, "süt al".into()));
-        app.on_event(finished(ZULIP, "drop", Err("x".into())));
+        app.pending_capture.push_back((SOZLU, "süt al".into()));
+        app.on_event(finished(ZULIP, "capture", Err("x".into())));
+        app.on_event(finished(SOZLU, "drop", Err("x".into())));
         assert_eq!(app.mode, Mode::Board);
-        assert!(app.pending_capture.is_some());
-        app.on_event(finished(SOZLU, "drop", Err("offline".into())));
+        assert_eq!(app.pending_capture.len(), 1);
+        app.on_event(finished(SOZLU, "capture", Err("offline".into())));
         assert_eq!(
             app.mode,
             Mode::Capture {
                 input: "süt al".into()
             }
         );
-        assert_eq!(app.pending_capture, None);
-        assert_eq!(app.flash.as_deref(), Some("sozlu: drop failed: offline"));
+        assert!(app.pending_capture.is_empty());
+        assert_eq!(app.flash.as_deref(), Some("sozlu: capture failed: offline"));
         app.on_key(code(KeyCode::Esc));
         assert_eq!(app.mode, Mode::Board);
     }
 
     #[test]
-    fn successful_drop_clears_the_pending_capture() {
+    fn captures_in_flight_keep_their_own_text() {
         let mut app = loaded_app();
-        app.pending_capture = Some((SOZLU, "süt al".into()));
-        app.on_event(finished(SOZLU, "drop", Ok(())));
-        assert_eq!(app.pending_capture, None);
+        app.pending_capture.push_back((SOZLU, "süt al".into()));
+        app.pending_capture.push_back((SOZLU, "ekmek al".into()));
+        app.on_event(finished(SOZLU, "capture", Ok(())));
         assert_eq!(app.mode, Mode::Board);
+        app.on_event(finished(SOZLU, "capture", Err("offline".into())));
+        assert_eq!(
+            app.mode,
+            Mode::Capture {
+                input: "ekmek al".into()
+            }
+        );
+        assert!(app.pending_capture.is_empty());
     }
 
     #[test]
