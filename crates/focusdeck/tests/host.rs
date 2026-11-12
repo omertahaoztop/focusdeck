@@ -1,4 +1,3 @@
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -55,6 +54,12 @@ impl Env {
     // a wrapper script gives each test its own environment without touching the shared process env
     fn exe(&self) -> PathBuf {
         let script = self.dir.path().join("run.sh");
+        self.write_script(&script);
+        script
+    }
+
+    // A child writes the file: a write handle opened here leaks into the forks of other tests and fails the exec with ETXTBSY.
+    fn write_script(&self, path: &Path) {
         let body = format!(
             "#!/bin/sh\nFAKE_MODE_FILE='{}' FAKE_LOG='{}' FAKE_LANG_LOG='{}' FAKE_START_LOG='{}' FAKE_PID_LOG='{}' exec '{}'\n",
             self.dir.path().join("mode").display(),
@@ -64,9 +69,13 @@ impl Env {
             self.pid_log().display(),
             fake_plugin().display()
         );
-        std::fs::write(&script, body).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        script
+        let status = Command::new("sh")
+            .args(["-c", "printf %s \"$1\" > \"$2\" && chmod 755 \"$2\"", "sh"])
+            .arg(body)
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     fn fake_log(&self) -> PathBuf {
@@ -554,7 +563,7 @@ fn installed_plugin(env: &Env, manifest: Option<&str>) -> (Paths, BoxSpec, Strin
     };
     let plugins = paths.plugin_dir();
     std::fs::create_dir_all(&plugins).unwrap();
-    std::fs::copy(env.exe(), plugins.join("fake")).unwrap();
+    env.write_script(&plugins.join("fake"));
     let hash = sha256_hex(&std::fs::read(plugins.join("fake")).unwrap());
     if let Some(sha) = manifest {
         let sha = if sha.is_empty() { &hash } else { sha };
