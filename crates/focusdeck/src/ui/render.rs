@@ -6,15 +6,20 @@ use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use std::sync::LazyLock;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::app::{App, BoxState, Drag, DropPlan, Mode};
+use super::app::{App, Drag, DropPlan, Mode};
 use super::{hint, layout};
 use crate::cli::display_safe;
 use crate::i18n::{msg, t, t_args};
 use focusdeck_protocol::Item;
 
-const HELP: [&str; 10] = [
+const HELP: [&str; 13] = [
+    msg::HELP_SELECT,
+    msg::HELP_REORDER,
+    msg::HELP_MOUSE,
     msg::HELP_NOTE,
     msg::HELP_DONE,
     msg::HELP_UNSTAR,
@@ -35,13 +40,13 @@ pub fn truncate(s: &str, width: usize) -> String {
     let budget = width.saturating_sub(1);
     let mut out = String::new();
     let mut used = 0;
-    for c in s.chars() {
-        let w = c.width().unwrap_or(0);
+    for g in s.graphemes(true) {
+        let w = g.width();
         if used + w > budget {
             break;
         }
         used += w;
-        out.push(c);
+        out.push_str(g);
     }
     if width > 0 {
         out.push('…');
@@ -49,28 +54,38 @@ pub fn truncate(s: &str, width: usize) -> String {
     out
 }
 
-pub fn draw(frame: &mut Frame, app: &App) {
-    draw_at(frame, app, Local::now());
+static COLOUR: LazyLock<bool> =
+    LazyLock::new(|| std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()));
+
+/// Sets a foreground only when colour is on; crossterm turns colour changes under NO_COLOR into an SGR reset that cancels REVERSED.
+fn colour(style: Style, c: Color, on: bool) -> Style {
+    if on { style.fg(c) } else { style }
 }
 
-pub fn draw_at(frame: &mut Frame, app: &App, now: DateTime<Local>) {
+pub fn draw(frame: &mut Frame, app: &App) {
+    draw_at(frame, app, Local::now(), *COLOUR);
+}
+
+pub fn draw_at(frame: &mut Frame, app: &App, now: DateTime<Local>, on: bool) {
     let area = frame.area();
     let [top, body, bottom] = layout::areas(area);
-    frame.render_widget(Paragraph::new(status_line(app, now, top.width)), top);
+    let scene = Scene {
+        app,
+        now,
+        on,
+        drag: app.drag(),
+    };
+    frame.render_widget(Paragraph::new(status_line(app, now, top.width, on)), top);
     let hint_line = truncate(&hint::text(app), usize::from(bottom.width));
-    frame.render_widget(
-        Paragraph::new(hint_line).style(Style::new().fg(Color::Gray)),
-        bottom,
-    );
+    frame.render_widget(Paragraph::new(hint_line), bottom);
     let focus = app.zoomed_box().unwrap_or(app.focus);
-    let drag = app.drag();
     for (idx, rect) in layout::frame_rects(area, app).into_iter().enumerate() {
         if !rect.is_empty() {
-            draw_box(frame, app, idx, rect, idx == focus, drag.as_ref(), now);
+            draw_box(frame, &scene, idx, rect, idx == focus);
         }
     }
-    if let Some(drag) = &drag {
-        draw_drag(frame, area, drag);
+    if let Some(drag) = &scene.drag {
+        draw_drag(frame, area, drag, &scene);
     }
     match &app.mode {
         Mode::Capture { input } => draw_capture(frame, body, input),
@@ -80,7 +95,7 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: DateTime<Local>) {
     }
 }
 
-fn status_line(app: &App, now: DateTime<Local>, width: u16) -> Line<'static> {
+fn status_line(app: &App, now: DateTime<Local>, width: u16, on: bool) -> Line<'static> {
     let refreshed = app.refreshed_at.map_or_else(
         || t(msg::STATUS_NOT_REFRESHED),
         |at| {
@@ -100,7 +115,7 @@ fn status_line(app: &App, now: DateTime<Local>, width: u16) -> Line<'static> {
     if let Some(flash) = &app.flash {
         spans.push(Span::styled(
             format!(" · {}", display_safe(flash)),
-            Style::new().fg(Color::Red),
+            colour(Style::new(), Color::Red, on),
         ));
     }
     clip_line(spans, usize::from(width))
@@ -124,7 +139,22 @@ fn is_overdue(item: &Item, now: DateTime<Local>) -> bool {
     item.overdue || item.due.is_some_and(|due| due < now)
 }
 
-fn box_title(app: &App, idx: usize, now: DateTime<Local>) -> String {
+/// Everything one frame needs besides the frame itself.
+struct Scene<'a> {
+    app: &'a App,
+    now: DateTime<Local>,
+    on: bool,
+    drag: Option<Drag>,
+}
+
+impl Scene<'_> {
+    fn paint(&self, c: Color) -> Style {
+        colour(Style::new(), c, self.on)
+    }
+}
+
+/// The title text and, in search mode, the column right after the typed query.
+fn box_title(app: &App, idx: usize, now: DateTime<Local>) -> (String, Option<usize>) {
     let state = &app.boxes[idx];
     let visible = app.visible(idx);
     let overdue = visible.iter().filter(|i| is_overdue(i, now)).count();
@@ -142,12 +172,21 @@ fn box_title(app: &App, idx: usize, now: DateTime<Local>) -> String {
             t_args(msg::BOX_OVERDUE, &[("count", overdue.into())])
         ));
     }
-    if let Mode::Search { zoom, query } = &app.mode
-        && *zoom == idx
-    {
+    let searching = match &app.mode {
+        Mode::Search { zoom, query } if *zoom == idx => Some(query.as_str()),
+        _ => None,
+    };
+    let mut cursor = None;
+    if let Some(query) = searching.or_else(|| app.active_filter(idx)) {
         title.push_str(&format!(" · /{}", display_safe(query)));
+        if searching.is_some() {
+            cursor = Some(title.width());
+        }
     }
-    title
+    if state.pending > 0 {
+        title.push_str(" …");
+    }
+    (title, cursor)
 }
 
 fn accepts_drop(app: &App, drag: &Drag, idx: usize) -> bool {
@@ -159,7 +198,7 @@ fn accepts_drop(app: &App, drag: &Drag, idx: usize) -> bool {
     }
 }
 
-fn draw_drag(frame: &mut Frame, area: Rect, drag: &Drag) {
+fn draw_drag(frame: &mut Frame, area: Rect, drag: &Drag, scene: &Scene) {
     let title = display_safe(&drag.item.title);
     let width = (title.width() as u16)
         .saturating_add(2)
@@ -178,21 +217,15 @@ fn draw_drag(frame: &mut Frame, area: Rect, drag: &Drag) {
     frame.render_widget(Clear, rect);
     let block = Block::bordered()
         .border_type(BorderType::LightDoubleDashed)
-        .border_style(Style::new().fg(Color::Yellow));
+        .border_style(scene.paint(Color::Green));
     let text = truncate(&title, usize::from(width.saturating_sub(2)));
     frame.render_widget(Paragraph::new(text).block(block), rect);
 }
 
-fn draw_box(
-    frame: &mut Frame,
-    app: &App,
-    idx: usize,
-    rect: Rect,
-    focused: bool,
-    drag: Option<&Drag>,
-    now: DateTime<Local>,
-) {
+fn draw_box(frame: &mut Frame, scene: &Scene, idx: usize, rect: Rect, focused: bool) {
+    let app = scene.app;
     let state = &app.boxes[idx];
+    let drag = scene.drag.as_ref();
     let plan = drag.map(|d| d.plan);
     let hovered =
         matches!(plan, Some(DropPlan::Into(i) | DropPlan::Reorder { idx: i, .. }) if i == idx);
@@ -201,30 +234,37 @@ fn draw_box(
         _ => None,
     };
     let border = if hovered {
-        Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        scene.paint(Color::Green).add_modifier(Modifier::BOLD)
     } else if plan == Some(DropPlan::Rejected(idx)) {
-        Style::new().fg(Color::Red)
+        scene.paint(Color::Red)
     } else if drag.is_some_and(|d| accepts_drop(app, d, idx)) {
-        Style::new().fg(Color::Yellow)
+        scene.paint(Color::Green)
     } else if focused {
-        Style::new().fg(Color::Cyan)
-    } else {
-        Style::new().fg(Color::DarkGray)
-    };
-    let border_type = if hovered {
-        BorderType::Thick
-    } else {
-        BorderType::Plain
-    };
-    let title = truncate(
-        &box_title(app, idx, now),
-        usize::from(rect.width.saturating_sub(2)),
-    );
-    let title_style = if focused {
-        Style::new().add_modifier(Modifier::BOLD)
+        scene.paint(Color::Cyan)
     } else {
         Style::new()
     };
+    let border_type = if hovered {
+        BorderType::Thick
+    } else if focused {
+        BorderType::Double
+    } else {
+        BorderType::Plain
+    };
+    let (title, cursor) = box_title(app, idx, scene.now);
+    let title = truncate(&title, usize::from(rect.width.saturating_sub(2)));
+    // the title inherits the border colour unless it is reset
+    let title_style = if focused {
+        Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(Color::Reset)
+    };
+    if let Some(col) = cursor {
+        let col = col
+            .min(title.width())
+            .min(usize::from(rect.width.saturating_sub(2)));
+        frame.set_cursor_position((rect.x + 1 + col as u16, rect.y));
+    }
     let block = Block::bordered()
         .border_type(border_type)
         .border_style(border)
@@ -238,14 +278,14 @@ fn draw_box(
         );
         let text = truncate(&message, usize::from(inner.width));
         let row = Rect::new(inner.x, inner.y, inner.width, inner.height.min(1));
-        frame.render_widget(Paragraph::new(text).style(Style::new().fg(Color::Red)), row);
+        frame.render_widget(Paragraph::new(text).style(scene.paint(Color::Red)), row);
     }
     let list = layout::list_area(rect, state.error.is_some());
     let scroll = layout::effective_scroll(state, list.height);
     let zoomed = app.zoomed_box() == Some(idx);
-    let lines: Vec<Line> = app
-        .visible(idx)
-        .into_iter()
+    let visible = app.visible(idx);
+    let mut lines: Vec<Line> = visible
+        .iter()
         .enumerate()
         .skip(scroll)
         .take(usize::from(list.height))
@@ -253,56 +293,59 @@ fn draw_box(
             let selected = focused && row == state.selected;
             let marked = mark == Some(row);
             let width = usize::from(list.width).saturating_sub(if marked { 2 } else { 0 });
-            let mut line = item_line(app, idx, state, item, width, zoomed, selected, now);
+            let mut line = item_line(scene, idx, item, width, zoomed, selected);
             if marked {
-                let arrow = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                let arrow = scene.paint(Color::Green).add_modifier(Modifier::BOLD);
                 line.spans.insert(0, Span::styled("▶ ", arrow));
             }
             line
         })
         .collect();
+    if let Some(query) = app.active_filter(idx)
+        && visible.is_empty()
+    {
+        let text = t_args(
+            msg::BOX_NO_MATCHES,
+            &[("query", display_safe(query).as_str().into())],
+        );
+        lines.push(Line::from(truncate(&text, usize::from(list.width))));
+    }
     frame.render_widget(Paragraph::new(lines), list);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn item_line(
-    app: &App,
+    scene: &Scene,
     idx: usize,
-    state: &BoxState,
     item: &Item,
     width: usize,
     zoomed: bool,
     selected: bool,
-    now: DateTime<Local>,
 ) -> Line<'static> {
+    let overdue = is_overdue(item, scene.now);
     let mut style = Style::new();
-    if is_overdue(item, now) {
-        style = style.fg(Color::Red);
+    if overdue {
+        style = scene.paint(Color::Red);
     }
-    if state.error.is_some() {
+    if scene.app.boxes[idx].error.is_some() {
         style = style.add_modifier(Modifier::DIM);
     }
     if selected {
         style = style.add_modifier(Modifier::REVERSED);
     }
-    let star = if zoomed && app.is_planned(idx, item) {
+    let flag = if overdue { "! " } else { "" };
+    let star = if zoomed && scene.app.is_planned(idx, item) {
         "★ "
     } else {
         ""
     };
-    let head = truncate(&format!("{star}{}", display_safe(&item.title)), width);
+    let head = truncate(&format!("{flag}{star}{}", display_safe(&item.title)), width);
     let mut spans = vec![Span::raw(head.clone())];
     let left = width.saturating_sub(head.width());
     if let Some(sub) = item.subtitle.as_deref().filter(|s| !s.is_empty())
         && left > 3
     {
         let text = truncate(&format!("  {}", display_safe(sub)), left);
-        let sub_style = if style.fg.is_some() {
-            Style::new()
-        } else {
-            Style::new().fg(Color::DarkGray)
-        };
-        spans.push(Span::styled(text, sub_style.add_modifier(Modifier::DIM)));
+        spans.push(Span::styled(text, Style::new().add_modifier(Modifier::DIM)));
     }
     Line::from(spans).style(style)
 }
@@ -320,7 +363,7 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 fn draw_overlay(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'static>>) {
     frame.render_widget(Clear, area);
     let block = Block::bordered()
-        .border_style(Style::new().fg(Color::Yellow))
+        .border_type(BorderType::Double)
         .title(truncate(title, usize::from(area.width.saturating_sub(2))));
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -338,8 +381,11 @@ fn draw_capture(frame: &mut Frame, body: Rect, input: &str) {
         .take_while(|(_, used)| *used < inner.max(1))
         .last()
         .map_or(input.len(), |(at, _)| at);
-    let shown = format!("{}▏", display_safe(&input[tail_start..]));
+    let shown = display_safe(&input[tail_start..]);
+    let col = u16::try_from(shown.width()).unwrap_or(u16::MAX);
     draw_overlay(frame, area, &t(msg::CAPTURE_TITLE), vec![Line::from(shown)]);
+    let x = area.x.saturating_add(1).saturating_add(col);
+    frame.set_cursor_position((x.min(area.right().saturating_sub(2)), area.y + 1));
 }
 
 fn draw_picker(frame: &mut Frame, app: &App, body: Rect, from: usize) {
@@ -362,7 +408,7 @@ fn draw_picker(frame: &mut Frame, app: &App, body: Rect, from: usize) {
 
 fn draw_help(frame: &mut Frame, body: Rect) {
     let lines: Vec<Line> = HELP.iter().map(|id| Line::from(t(id))).collect();
-    let area = centered(body, body.width.min(60), HELP.len() as u16 + 2);
+    let area = centered(body, body.width.min(70), HELP.len() as u16 + 2);
     draw_overlay(frame, area, &t(msg::HELP_TITLE), lines);
 }
 
@@ -398,8 +444,19 @@ mod tests {
 
     fn render(app: &App, w: u16, h: u16) -> Terminal<TestBackend> {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-        term.draw(|f| draw_at(f, app, now())).unwrap();
+        term.draw(|f| draw_at(f, app, now(), true)).unwrap();
         term
+    }
+
+    fn render_plain(app: &App, w: u16, h: u16) -> Terminal<TestBackend> {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| draw_at(f, app, now(), false)).unwrap();
+        term
+    }
+
+    fn cursor(term: &mut Terminal<TestBackend>) -> (u16, u16) {
+        let pos = term.get_cursor_position().unwrap();
+        (pos.x, pos.y)
     }
 
     fn rows(term: &Terminal<TestBackend>) -> Vec<String> {
@@ -431,6 +488,182 @@ mod tests {
         assert_eq!(truncate("tam", 3), "tam");
         assert_eq!(truncate("dört", 0), "");
         assert_eq!(truncate("🚀🚀🚀", 4), "🚀…");
+    }
+
+    #[test]
+    fn truncate_never_splits_a_grapheme_cluster() {
+        assert_eq!(truncate("xe\u{301}yzw", 3), "xe\u{301}…");
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let cut = truncate(&format!("ab{family}cd"), 5);
+        assert_eq!(cut, format!("ab{family}…"));
+        let cut = truncate(&format!("ab{family}cd"), 4);
+        assert_eq!(cut, "ab…");
+    }
+
+    #[test]
+    fn no_color_leaves_every_cell_at_the_default_colours_and_reverses_the_selection() {
+        let mut app = board();
+        app.boxes[SOZLU].items[0].due = Some((now() - Duration::days(1)).fixed_offset());
+        app.boxes[ZULIP].error = Some("ağ yok".into());
+        let term = render_plain(&app, 120, 40);
+        let buf = term.backend().buffer();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                let cell = &buf[(x, y)];
+                assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset), "{x},{y}");
+            }
+        }
+        let (x, y) = find(&term, "birinci görev");
+        assert!(buf[(x, y)].modifier.contains(Modifier::REVERSED));
+        let (x, y) = find(&term, "üçüncü görev");
+        assert!(!buf[(x, y)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn overdue_rows_start_with_a_bang_with_or_without_colour() {
+        let mut app = board();
+        app.boxes[ZULIP].items[1].due = Some((now() - Duration::days(1)).fixed_offset());
+        for term in [render(&app, 120, 40), render_plain(&app, 120, 40)] {
+            find(&term, "! ikinci mesaj");
+            assert!(!rows(&term).iter().any(|r| r.contains("! zulip mesajı")));
+        }
+    }
+
+    #[test]
+    fn focused_box_and_overlays_use_double_borders() {
+        let mut app = board();
+        let term = render(&app, 120, 40);
+        let buf = term.backend().buffer();
+        assert_eq!(buf[(0, 1)].symbol(), "╔");
+        assert_eq!(buf[(40, 1)].symbol(), "┌");
+        app.mode = Mode::Help;
+        let term = render(&app, 120, 40);
+        let (x, y) = find(&term, "Keys");
+        assert_eq!(term.backend().buffer()[(x - 1, y)].symbol(), "╔");
+        app.mode = Mode::Capture {
+            input: String::new(),
+        };
+        let term = render(&app, 120, 40);
+        let (x, y) = find(&term, "Note");
+        assert_eq!(term.backend().buffer()[(x - 1, y)].symbol(), "╔");
+        app.mode = Mode::MovePicker {
+            from: ZULIP,
+            item: "z1".into(),
+        };
+        let term = render(&app, 120, 40);
+        let (x, y) = find(&term, "Move to");
+        assert_eq!(term.backend().buffer()[(x - 1, y)].symbol(), "╔");
+    }
+
+    #[test]
+    fn titles_hint_and_subtitles_keep_the_default_foreground() {
+        let mut app = board();
+        app.boxes[ZULIP].items[0].subtitle = Some("alt satır".into());
+        let term = render(&app, 120, 40);
+        let buf = term.backend().buffer();
+        let (x, y) = find(&term, "zulip 2");
+        assert_eq!(buf[(x, y)].fg, Color::Reset);
+        let (x, y) = find(&term, "Redmine planım");
+        assert_eq!(buf[(x, y)].fg, Color::Reset);
+        let (x, y) = find(&term, "? help");
+        assert_eq!(buf[(x, y)].fg, Color::Reset);
+        let (x, y) = find(&term, "alt satır");
+        assert_eq!(buf[(x, y)].fg, Color::Reset);
+        assert!(buf[(x, y)].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn board_hint_at_width_40_still_names_help_and_quit() {
+        let term = render(&board(), 40, 20);
+        let last = rows(&term).pop().unwrap();
+        assert!(last.contains("? help") && last.contains("q quit"), "{last}");
+    }
+
+    #[test]
+    fn kept_filter_stays_in_the_zoomed_title_and_empty_result_says_so() {
+        let mut app = board();
+        app.focus = REDMINE;
+        app.mode = Mode::Zoom(REDMINE);
+        app.mode = Mode::Search {
+            zoom: REDMINE,
+            query: "ışık".into(),
+        };
+        app.on_key(crossterm::event::KeyEvent::from(
+            crossterm::event::KeyCode::Enter,
+        ));
+        let term = render(&app, 120, 40);
+        find(&term, "Redmine planım 1 · /ışık");
+        app.mode = Mode::Search {
+            zoom: REDMINE,
+            query: "yok böyle".into(),
+        };
+        app.on_key(crossterm::event::KeyEvent::from(
+            crossterm::event::KeyCode::Enter,
+        ));
+        let term = render(&app, 120, 40);
+        find(&term, "Redmine planım 0 · /yok böyle");
+        find(&term, "no matches for \"yok böyle\"");
+    }
+
+    #[test]
+    fn unfiltered_zoom_has_no_filter_suffix() {
+        let mut app = board();
+        app.focus = REDMINE;
+        app.mode = Mode::Zoom(REDMINE);
+        let term = render(&app, 120, 40);
+        assert!(!rows(&term)[1].contains(" · /"), "{}", rows(&term)[1]);
+    }
+
+    #[test]
+    fn title_ends_with_an_ellipsis_while_commands_are_pending() {
+        let mut app = board();
+        app.boxes[ZULIP].pending = 1;
+        let term = render(&app, 120, 40);
+        find(&term, "zulip 2 …");
+        app.boxes[ZULIP].pending = 0;
+        let term = render(&app, 120, 40);
+        assert!(!rows(&term).iter().any(|r| r.contains("zulip 2 …")));
+    }
+
+    #[test]
+    fn capture_places_the_terminal_cursor_after_the_input() {
+        let mut app = board();
+        app.mode = Mode::Capture {
+            input: "fikir".into(),
+        };
+        let mut term = render(&app, 120, 40);
+        let (x, y) = find(&term, "fikir");
+        assert_eq!(cursor(&mut term), (x + 5, y));
+        assert!(!rows(&term).iter().any(|r| r.contains('▏')));
+    }
+
+    #[test]
+    fn capture_cursor_stays_inside_the_frame_for_scrolled_input() {
+        let mut app = board();
+        app.mode = Mode::Capture {
+            input: format!("{} sonuncu", "çok uzun not ".repeat(20)),
+        };
+        let mut term = render(&app, 60, 10);
+        let (x, y) = find(&term, "sonuncu");
+        let (cx, cy) = cursor(&mut term);
+        assert_eq!(cy, y);
+        assert_eq!(cx, x + 7);
+        let right = rows(&term)[usize::from(y)].chars().count() as u16 - 1;
+        assert!(cx < right, "{cx} {right}");
+    }
+
+    #[test]
+    fn search_places_the_cursor_after_the_query_in_the_title() {
+        let mut app = board();
+        app.focus = REDMINE;
+        app.mode = Mode::Search {
+            zoom: REDMINE,
+            query: "ışı".into(),
+        };
+        app.boxes[REDMINE].pending = 1;
+        let mut term = render(&app, 120, 40);
+        let (x, y) = find(&term, "/ışı");
+        assert_eq!(cursor(&mut term), (x + 4, y));
     }
 
     #[test]
@@ -557,6 +790,21 @@ mod tests {
     }
 
     #[test]
+    fn help_lists_selection_reorder_mouse_and_the_second_space() {
+        let mut app = board();
+        app.mode = Mode::Help;
+        let help = rows(&render(&app, 120, 40)).join("\n");
+        for needle in [
+            "PageUp/PageDown, Home/End  select item",
+            "Shift+↑↓  move the item up or down",
+            "click select · double click zoom · drag move or reorder",
+            "a second space deletes it",
+        ] {
+            assert!(help.contains(needle), "{needle}\n{help}");
+        }
+    }
+
+    #[test]
     fn tr_ui_texts_unchanged() {
         let tr = i18n::localizer(Some("tr"));
         assert_eq!(tr.t(msg::HINT_BOARD_NOTE), "a not al");
@@ -595,6 +843,7 @@ mod tests {
         app.boxes[ZULIP].items[0].title = "kötü\u{1b}[31m başlık".into();
         let term = render(&app, 120, 40);
         assert!(!rows(&term).iter().any(|r| r.contains('\u{1b}')));
+        find(&term, "kötü?[31m başlık");
     }
 
     #[test]
@@ -614,7 +863,7 @@ mod tests {
             input: format!("{} sonuncu", "çok uzun not ".repeat(20)),
         };
         let term = render(&app, 60, 10);
-        find(&term, "sonuncu▏");
+        find(&term, "sonuncu");
     }
 
     fn mouse(kind: MouseEventKind, x: u16, y: u16) -> MouseEvent {
@@ -664,16 +913,16 @@ mod tests {
         pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 10, 10);
         let term = render(&app, 120, 40);
         let corner = &term.backend().buffer()[(0, 1)];
-        assert_eq!((corner.symbol(), corner.fg), ("┏", Color::Yellow));
+        assert_eq!((corner.symbol(), corner.fg), ("┏", Color::Green));
 
         pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 50, 10);
         let term = render(&app, 120, 40);
         let buf = term.backend().buffer();
-        assert_eq!((buf[(0, 1)].symbol(), buf[(0, 1)].fg), ("┌", Color::Yellow));
+        assert_eq!((buf[(0, 1)].symbol(), buf[(0, 1)].fg), ("┌", Color::Green));
         assert_eq!(buf[(40, 1)].fg, Color::Red, "redmine kabul etmez");
         assert_ne!(
             buf[(80, 1)].fg,
-            Color::Yellow,
+            Color::Green,
             "zulip kaynak ve sıralama yok"
         );
     }
@@ -699,7 +948,7 @@ mod tests {
         pointer(&mut app, MouseEventKind::Drag(MouseButton::Left), 20, 8);
         let term = render(&app, 120, 40);
         let cell = &term.backend().buffer()[(0, 1)];
-        assert_eq!(cell.fg, Color::Yellow);
+        assert_eq!(cell.fg, Color::Green);
     }
 
     #[test]
@@ -710,6 +959,6 @@ mod tests {
         pointer(&mut app, MouseEventKind::Up(MouseButton::Left), 82, 2);
         let term = render(&app, 120, 40);
         assert!(!rows(&term).iter().any(|r| r.contains('╌')));
-        assert_ne!(term.backend().buffer()[(0, 1)].fg, Color::Yellow);
+        assert_ne!(term.backend().buffer()[(0, 1)].fg, Color::Green);
     }
 }

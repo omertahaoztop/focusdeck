@@ -25,6 +25,7 @@ hint-action-done = x done
 hint-action-unstar = u unstar
 hint-zoom-plan = space add to plan
 hint-zoom-search = / search
+hint-zoom-reorder = Shift+↑↓ reorder
 hint-zoom-back = Esc back
 hint-capture = Enter save · Esc cancel · @person #label R123 · at the end 14:30, tomorrow 09:00, 30min
 hint-picker = 1-9 target box · Esc cancel
@@ -40,14 +41,17 @@ drag-cancel = { $what } · Esc cancel
 
 # Key list opened with "?", one key per line, keys padded with two spaces.
 help-title = Keys
+help-select = ↑↓, PageUp/PageDown, Home/End  select item (page keys: zoomed box)
+help-reorder = Shift+↑↓  move the item up or down (zoomed box)
+help-mouse = mouse  click select · double click zoom · drag move or reorder
 help-note = a  take a note (into the capture_into box)
 help-done = x  mark the selected item done
 help-unstar = u  unstar the selected item
 help-move = m  move to another box
-help-plan = space  add to / remove from plan (zoomed box)
+help-plan = space  add to plan · a second space deletes it (zoomed box)
 help-open = o  open the link in the browser
 help-search = /  search (zoomed box)
-help-next = Tab, arrows  switch box (↑↓ at the list edge)
+help-next = Tab, Shift+Tab, arrows  switch box (↑↓ at the list edge)
 help-zoom = Enter  zoom the box · Esc back
 help-quit = q  quit
 
@@ -56,6 +60,7 @@ box-count = { $total }
 box-planned = { $planned } / { $total }
 box-overdue = { $count } overdue
 box-error = error: { $message }
+box-no-matches = no matches for "{ $query }"
 
 picker-title = Move to
 capture-title = Note

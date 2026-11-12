@@ -25,6 +25,7 @@ hint-action-done = x bitti
 hint-action-unstar = u yıldızı kaldır
 hint-zoom-plan = boşluk planıma al
 hint-zoom-search = / ara
+hint-zoom-reorder = Shift+↑↓ sırala
 hint-zoom-back = Esc geri
 hint-capture = Enter kaydet · Esc vazgeç · @kişi #etiket R123 · sonda 14:30, yarın 09:00, 30dk
 hint-picker = 1-9 hedef kutu · Esc vazgeç
@@ -40,14 +41,17 @@ drag-cancel = { $what } · Esc vazgeç
 
 # Key list opened with "?", one key per line, keys padded with two spaces.
 help-title = Tuşlar
+help-select = ↑↓, PageUp/PageDown, Home/End  öğe seç (sayfa tuşları: büyütülmüş kutu)
+help-reorder = Shift+↑↓  öğeyi yukarı veya aşağı taşı (büyütülmüş kutu)
+help-mouse = fare  tıkla seç · çift tıkla büyüt · sürükle taşı veya sırala
 help-note = a  not al (capture_into kutusuna)
 help-done = x  seçili öğe bitti
 help-unstar = u  yıldızı kaldır
 help-move = m  başka kutuya taşı
-help-plan = boşluk  planıma al / çıkar (büyütülmüş kutu)
+help-plan = boşluk  planıma al · ikinci boşluk siler (büyütülmüş kutu)
 help-open = o  linki tarayıcıda aç
 help-search = /  ara (büyütülmüş kutu)
-help-next = Tab, oklar  kutu değiştir (↑↓ liste ucunda)
+help-next = Tab, Shift+Tab, oklar  kutu değiştir (↑↓ liste ucunda)
 help-zoom = Enter  kutuyu büyüt · Esc geri
 help-quit = q  çık
 
@@ -56,6 +60,7 @@ box-count = { $total }
 box-planned = { $planned } / { $total }
 box-overdue = { $count } gecikmiş
 box-error = hata: { $message }
+box-no-matches = "{ $query }" için eşleşme yok
 
 picker-title = Nereye taşınsın
 capture-title = Not al
