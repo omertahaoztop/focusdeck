@@ -1,7 +1,9 @@
 pub mod capture;
+pub mod cli;
 pub mod config;
 pub mod duration;
 pub mod host;
+pub mod install;
 pub mod links;
 pub mod paths;
 pub mod profile;
