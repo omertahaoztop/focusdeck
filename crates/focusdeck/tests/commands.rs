@@ -147,8 +147,9 @@ impl Env {
         env.script(
             &root.join("bin/notify-send"),
             &format!(
-                "for a in \"$@\"; do printf '%s\\t' \"$a\"; done >> '{0}'\necho >> '{0}'",
-                env.notify_log().display()
+                "for a in \"$@\"; do printf '%s\\t' \"$a\"; done >> '{0}'\necho >> '{0}'\n[ ! -e '{1}' ]",
+                env.notify_log().display(),
+                root.join("notify-fail").display()
             ),
         );
         env.set_mode("ok");
@@ -456,6 +457,45 @@ fn remind_send_notifies_once() {
     assert_eq!(env.run(&["remind", "--send"]).code(), 0);
     assert_eq!(env.notifications().len(), 1);
     assert_eq!(env.run(&["remind"]).stdout(), "");
+}
+
+#[test]
+fn remind_send_retries_after_failed_notification() {
+    let env = Env::standard();
+    let when = Local::now().fixed_offset() - Duration::minutes(1);
+    env.set_reminders(&[Reminder {
+        at: when,
+        item: item("5", "toplantı"),
+    }]);
+    std::fs::write(env.dir.path().join("notify-fail"), "").unwrap();
+    assert_eq!(env.run(&["remind", "--send"]).code(), 0);
+    assert_eq!(env.notifications().len(), 1);
+    let state_path = env.state_dir().join("reminded.json");
+    assert!(State::load(&state_path).0.is_empty());
+
+    std::fs::remove_file(env.dir.path().join("notify-fail")).unwrap();
+    assert_eq!(env.run(&["remind", "--send"]).code(), 0);
+    assert_eq!(env.notifications().len(), 2);
+    assert_eq!(State::load(&state_path).0.len(), 1);
+
+    assert_eq!(env.run(&["remind", "--send"]).code(), 0);
+    assert_eq!(env.notifications().len(), 2);
+}
+
+#[test]
+fn remind_output_strips_control_characters_from_titles() {
+    let env = Env::standard();
+    let when = Local::now().fixed_offset() - Duration::minutes(1);
+    env.set_reminders(&[Reminder {
+        at: when,
+        item: item("5", "a\x1b[31mkırmızı\nsatır\r"),
+    }]);
+    let ran = env.run(&["remind"]);
+    assert_eq!(ran.code(), 0, "{}", ran.stderr());
+    let out = ran.stdout();
+    let line = out.strip_suffix('\n').unwrap();
+    assert!(line.ends_with("a?[31mkırmızı?satır?"), "{line:?}");
+    assert!(!line.chars().any(char::is_control));
 }
 
 #[test]

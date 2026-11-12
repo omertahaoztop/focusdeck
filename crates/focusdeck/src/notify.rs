@@ -1,4 +1,4 @@
-//! Desktop notifications via notify-send; failures go to the log and never reach the caller.
+//! Desktop notifications via notify-send; failures go to the log and are reported as `false`.
 
 use std::io::Write;
 use std::path::Path;
@@ -6,11 +6,11 @@ use std::process::{Command, Stdio};
 
 use crate::paths::Paths;
 
-pub fn send(title: &str, body: &str, critical: bool) {
-    send_logged(&Paths::from_env().log_file(), title, body, critical);
+pub fn send(title: &str, body: &str, critical: bool) -> bool {
+    send_logged(&Paths::from_env().log_file(), title, body, critical)
 }
 
-pub fn send_logged(log: &Path, title: &str, body: &str, critical: bool) {
+pub fn send_logged(log: &Path, title: &str, body: &str, critical: bool) -> bool {
     let mut cmd = Command::new("notify-send");
     if critical {
         cmd.args(["-u", "critical"]);
@@ -21,9 +21,15 @@ pub fn send_logged(log: &Path, title: &str, body: &str, critical: bool) {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     match cmd.status() {
-        Ok(status) if status.success() => {}
-        Ok(status) => log_line(log, &format!("notify-send {status} ile çıktı")),
-        Err(e) => log_line(log, &format!("notify-send başlatılamadı: {e}")),
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            log_line(log, &format!("notify-send {status} ile çıktı"));
+            false
+        }
+        Err(e) => {
+            log_line(log, &format!("notify-send başlatılamadı: {e}"));
+            false
+        }
     }
 }
 

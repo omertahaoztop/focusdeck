@@ -9,6 +9,7 @@ use chrono::{DateTime, Duration, FixedOffset};
 use focusdeck_protocol::{Reminder, RemindersParams, RemindersResult};
 use serde::{Deserialize, Serialize};
 
+use crate::cli::display_safe;
 use crate::notify;
 use crate::paths::Paths;
 use crate::profile::Profile;
@@ -112,10 +113,11 @@ pub async fn run(
     for (k, r) in &found {
         let time = r.at.with_timezone(now.offset()).format("%H:%M").to_string();
         if send {
-            notify::send_logged(&log, &format!("⏰ {}", r.item.title), &time, true);
-            state.0.insert(k.clone(), r.at);
+            if notify::send_logged(&log, &format!("⏰ {}", r.item.title), &time, true) {
+                state.0.insert(k.clone(), r.at);
+            }
         } else {
-            println!("{time}  {}", r.item.title);
+            println!("{time}  {}", display_safe(&r.item.title));
         }
     }
     if send {
