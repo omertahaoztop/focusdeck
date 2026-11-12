@@ -20,7 +20,10 @@ fn main() -> ExitCode {
         i18n::init(requested);
         return match focusdeck::local::plugin::serve_stdio() {
             Ok(()) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::FAILURE,
+            Err(e) => {
+                eprintln!("{} {e}", i18n::t(i18n::msg::ERROR_PREFIX));
+                ExitCode::FAILURE
+            }
         };
     }
     let runtime = match tokio::runtime::Runtime::new() {

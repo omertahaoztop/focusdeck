@@ -326,6 +326,13 @@ fn existing_names(dir: &Path) -> Result<Vec<String>, ProfileError> {
 }
 
 fn create_starter(paths: &Paths) -> Result<String, ProfileError> {
+    create_starter_with(paths, |from, to| std::fs::hard_link(from, to))
+}
+
+fn create_starter_with(
+    paths: &Paths,
+    link: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<String, ProfileError> {
     const NAME: &str = "notes";
     let path = paths.profile_path(NAME);
     let create_error = |source| ProfileError::Create {
@@ -341,9 +348,26 @@ fn create_starter(paths: &Paths) -> Result<String, ProfileError> {
         std::process::id(),
         COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let published = write_synced(&tmp, &starter_profile(&i18n::t(msg::STARTER_TITLE)))
-        .and_then(|()| std::fs::hard_link(&tmp, &path));
-    let _ = std::fs::remove_file(&tmp);
+    let content = starter_profile(&i18n::t(msg::STARTER_TITLE));
+    let published = write_synced(&tmp, &content).and_then(|()| match link(&tmp, &path) {
+        // filesystems without hard links get a direct exclusive write instead
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => write_synced(&path, &content),
+        linked => linked,
+    });
+    if let Err(e) = std::fs::remove_file(&tmp)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!(
+            "{}",
+            i18n::t_args(
+                msg::STARTER_TMP_LEFT,
+                &[
+                    ("path", tmp.display().to_string().as_str().into()),
+                    ("error", e.to_string().as_str().into()),
+                ],
+            )
+        );
+    }
     match published {
         Ok(()) => {}
         // another focusdeck published a complete file first
@@ -353,14 +377,20 @@ fn create_starter(paths: &Paths) -> Result<String, ProfileError> {
     Ok(NAME.to_string())
 }
 
+/// Creates `path` exclusively; a failed write removes the partial file again.
 fn write_synced(path: &Path, content: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)?;
-    file.write_all(content.as_bytes())?;
-    file.sync_all()
+    let written = file
+        .write_all(content.as_bytes())
+        .and_then(|()| file.sync_all());
+    if written.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    written
 }
 
 pub fn starter_profile(title: &str) -> String {
@@ -686,6 +716,17 @@ config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/
             });
             assert_eq!(profile_files(&paths), ["notes.toml"]);
         }
+    }
+
+    #[test]
+    fn starter_falls_back_to_a_direct_write_without_hard_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(&dir);
+        let unsupported = |_: &Path, _: &Path| Err(std::io::ErrorKind::Unsupported.into());
+        assert_eq!(create_starter_with(&paths, unsupported).unwrap(), "notes");
+        assert_eq!(profile_files(&paths), ["notes.toml"]);
+        let p = load(&paths.profile_path("notes")).unwrap();
+        assert_eq!(p.boxes.len(), 1);
     }
 
     #[cfg(unix)]

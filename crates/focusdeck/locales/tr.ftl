@@ -189,3 +189,4 @@ local-position-required = sıra numarası gerekli
 local-unknown-action = bilinmeyen eylem: { $action }
 
 starter-title = Notlar
+starter-tmp-left = geçici dosya silinemedi { $path }: { $error }
