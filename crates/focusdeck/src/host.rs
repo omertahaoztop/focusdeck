@@ -11,13 +11,15 @@ use crate::i18n::{self, msg, t, t_args};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 const BAD_LINE_LIMIT: usize = 200;
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_STDERR_LINE: usize = 64 * 1024;
+// a long-lived writer reopens the log this often so rotation sees its growth
+const LOG_REOPEN_AFTER: usize = 64 * 1024;
 
 #[derive(Debug)]
 pub enum HostError {
@@ -315,11 +317,14 @@ async fn read_capped<R: AsyncBufRead + Unpin>(
     }
 }
 
-async fn log_stderr(label: String, stderr: ChildStderr, path: PathBuf) {
+fn open_log(path: &std::path::Path) -> Option<tokio::fs::File> {
+    crate::private::log(path).ok().map(tokio::fs::File::from_std)
+}
+
+async fn log_stderr<R: AsyncRead + Unpin>(label: String, stderr: R, path: PathBuf) {
     let mut reader = BufReader::new(stderr);
-    let mut file = crate::private::log(&path)
-        .ok()
-        .map(tokio::fs::File::from_std);
+    let mut file = open_log(&path);
+    let mut written = 0;
     while let Ok(Some(line)) = read_capped(&mut reader, MAX_STDERR_LINE, true).await {
         // keeps draining when the log is unwritable so the child never blocks on a full pipe
         let Some(f) = file.as_mut() else { continue };
@@ -327,6 +332,12 @@ async fn log_stderr(label: String, stderr: ChildStderr, path: PathBuf) {
         let entry = format!("[{label}] {}\n", text.strip_suffix('\r').unwrap_or(&text));
         if f.write_all(entry.as_bytes()).await.is_err() || f.flush().await.is_err() {
             file = None;
+            continue;
+        }
+        written += entry.len();
+        if written >= LOG_REOPEN_AFTER {
+            file = open_log(&path);
+            written = 0;
         }
     }
 }
@@ -384,5 +395,19 @@ mod tests {
         let command = host.command();
         let args: Vec<_> = command.as_std().get_args().collect();
         assert_eq!(args, ["serve-local"]);
+    }
+
+    #[tokio::test]
+    async fn a_chatty_writer_rotates_the_log_while_it_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("focusdeck.log");
+        let line = format!("{}\n", "x".repeat(99));
+        let total = usize::try_from(crate::private::LOG_LIMIT).unwrap() + 2 * LOG_REOPEN_AFTER;
+        let input = line.repeat(total / line.len() + 1);
+        log_stderr("p".into(), std::io::Cursor::new(input), path.clone()).await;
+        let entry = "[p] ".len() + line.len();
+        let cap = usize::try_from(crate::private::LOG_LIMIT).unwrap() + LOG_REOPEN_AFTER + entry;
+        assert!(dir.path().join("focusdeck.log.1").exists());
+        assert!(std::fs::metadata(&path).unwrap().len() <= cap as u64);
     }
 }
