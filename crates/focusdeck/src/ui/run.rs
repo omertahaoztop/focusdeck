@@ -666,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_inside_the_same_cell_needs_no_redraw() {
+    fn moved_events_never_redraw() {
         assert!(!mouse_needs_redraw(MouseEventKind::Moved));
         for kind in [
             MouseEventKind::Down(MouseButton::Left),

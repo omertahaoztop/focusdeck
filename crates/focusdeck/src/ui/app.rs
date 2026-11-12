@@ -346,20 +346,9 @@ impl App {
         self.visible(idx).get(selected).map(|i| (*i).clone())
     }
 
-    fn reorder_effect(
-        &self,
-        idx: usize,
-        item: &str,
-        from_row: usize,
-        row: usize,
-    ) -> Option<Effect> {
+    fn reorder_effect(&self, idx: usize, item: &str, row: usize) -> Option<Effect> {
         let target = self.visible(idx).get(row)?.id.clone();
-        let at = self.boxes[idx]
-            .items
-            .iter()
-            .filter(|i| i.id != item)
-            .position(|i| i.id == target)?;
-        let position = if row > from_row { at + 1 } else { at };
+        let position = self.boxes[idx].items.iter().position(|i| i.id == target)?;
         Some(plain_action(
             idx,
             item,
@@ -788,9 +777,7 @@ impl App {
         if to >= self.visible(idx).len() {
             return Vec::new();
         }
-        self.reorder_effect(idx, &item.id, from, to)
-            .into_iter()
-            .collect()
+        self.reorder_effect(idx, &item.id, to).into_iter().collect()
     }
 
     fn jump(&mut self, idx: usize, code: KeyCode) {
@@ -993,12 +980,11 @@ impl App {
         let Some(from) = self.pressed.take() else {
             return Vec::new();
         };
-        let Some((from_row, item)) = self
+        let Some(item) = self
             .visible(from.box_idx)
             .into_iter()
-            .enumerate()
-            .find(|(_, i)| i.id == from.item)
-            .map(|(row, i)| (row, i.clone()))
+            .find(|i| i.id == from.item)
+            .cloned()
         else {
             return Vec::new();
         };
@@ -1007,7 +993,7 @@ impl App {
         }
         match self.drop_plan(&from, target) {
             DropPlan::Reorder { idx, row } => self
-                .reorder_effect(idx, &item.id, from_row, row)
+                .reorder_effect(idx, &item.id, row)
                 .into_iter()
                 .collect(),
             DropPlan::Into(idx) => vec![Effect::Drop {
