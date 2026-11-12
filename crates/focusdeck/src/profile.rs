@@ -69,6 +69,8 @@ pub enum ProfileError {
     UnknownCaptureInto(String),
     #[error("{0} kutusu kendine plan_into veremez")]
     PlanIntoSelf(String),
+    #[error("plan_into bilinmeyen kutuya bakıyor: {0}")]
+    UnknownPlanInto(String),
     #[error("{0} kutusunun width ve height değeri en az 1 olmalı")]
     EmptyBox(String),
     #[error("{first} ve {second} kutuları aynı hücrede: satır {row} sütun {col}")]
@@ -99,6 +101,11 @@ impl Profile {
             }
             if b.plan_into.as_deref() == Some(b.id.as_str()) {
                 return Err(ProfileError::PlanIntoSelf(b.id.clone()));
+            }
+            if let Some(target) = &b.plan_into
+                && self.box_index(target).is_none()
+            {
+                return Err(ProfileError::UnknownPlanInto(target.clone()));
             }
         }
         if let Some(target) = &self.capture_into
@@ -242,6 +249,15 @@ config = { url = "https://destek.mono.tr", key_file = "~/.config/focusdeck/secre
         assert_eq!(
             load_str(t).unwrap_err().to_string(),
             "capture_into bilinmeyen kutuya bakıyor: yok"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_plan_into() {
+        let t = "name = \"x\"\n[[box]]\nid = \"redmine\"\ntitle = \"a\"\nplugin = \"p\"\nrow = 0\ncol = 0\nplan_into = \"yok\"\n";
+        assert_eq!(
+            load_str(t).unwrap_err().to_string(),
+            "plan_into bilinmeyen kutuya bakıyor: yok"
         );
     }
 
