@@ -1,5 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,6 +31,10 @@ impl Queue {
     }
 
     pub fn take_all(&self) -> io::Result<Vec<Queued>> {
+        self.take_all_with(|path| fs::remove_file(path))
+    }
+
+    fn take_all_with(&self, remove: impl Fn(&Path) -> io::Result<()>) -> io::Result<Vec<Queued>> {
         let _lock = match self.lock() {
             Ok(lock) => lock,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -44,15 +49,20 @@ impl Queue {
             Err(e) => return Err(e),
         }
 
-        // Files are deleted only after every one was read, so an error loses nothing.
-        let mut out = Vec::new();
+        // Files are deleted only after every one was read, so a read error loses nothing.
+        let mut read = Vec::new();
         for aside in &asides {
-            out.extend(decode(&fs::read(aside)?));
+            read.push(decode(&fs::read(aside)?).collect::<Vec<_>>());
         }
-        for aside in &asides {
-            fs::remove_file(aside)?;
+        for (done, aside) in asides.iter().enumerate() {
+            if let Err(e) = remove(aside) {
+                // Entries of already deleted asides lost their file; asides still on disk keep theirs.
+                let restored: Vec<Queued> = read.drain(..done).flatten().collect();
+                self.append_locked(&restored)?;
+                return Err(e);
+            }
         }
-        Ok(out)
+        Ok(read.into_iter().flatten().collect())
     }
 
     pub fn put_back(&self, items: &[Queued]) -> io::Result<()> {
@@ -111,16 +121,33 @@ impl Queue {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
+        let _lock = self.lock()?;
+        self.append_locked(items)
+    }
+
+    fn append_locked(&self, items: &[Queued]) -> io::Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
         let mut buf = String::new();
         for item in items {
             buf.push_str(&serde_json::to_string(item).map_err(io::Error::other)?);
             buf.push('\n');
         }
-        let _lock = self.lock()?;
         let mut file = OpenOptions::new()
+            .read(true)
             .create(true)
             .append(true)
             .open(&self.path)?;
+        // a crash-truncated last line must not swallow the next record
+        let len = file.metadata()?.len();
+        if len > 0 {
+            let mut last = [0u8; 1];
+            file.read_exact_at(&mut last, len - 1)?;
+            if last[0] != b'\n' {
+                buf.insert(0, '\n');
+            }
+        }
         file.write_all(buf.as_bytes())
     }
 }
@@ -281,6 +308,48 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].text, "kaldi");
         assert!(q.take_all().unwrap().is_empty());
+    }
+
+    #[test]
+    fn push_after_truncated_line_keeps_new_note() {
+        let (dir, q) = queue();
+        let broken = "{\"text\":\"koş".as_bytes();
+        fs::write(
+            dir.path().join("capture-queue.jsonl"),
+            &broken[..broken.len() - 1],
+        )
+        .unwrap();
+        q.push("yeni", at("2026-11-12T10:00:00+03:00")).unwrap();
+        let got = q.take_all().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text, "yeni");
+    }
+
+    #[test]
+    fn failed_second_aside_removal_loses_nothing() {
+        let (dir, q) = queue();
+        let line = |t: &str| format!("{{\"text\":\"{t}\",\"at\":\"2026-11-12T10:00:00+03:00\"}}\n");
+        let aside = |n: u8| {
+            dir.path()
+                .join(format!("capture-queue.jsonl.taken.0000000000000000000{n}-1-000000"))
+        };
+        fs::write(aside(1), line("a")).unwrap();
+        fs::write(aside(2), line("b")).unwrap();
+        q.push("canli", at("2026-11-12T10:00:00+03:00")).unwrap();
+        let bad = aside(2);
+        let err = q
+            .take_all_with(|p| {
+                if p == bad {
+                    Err(io::Error::other("kilitli"))
+                } else {
+                    fs::remove_file(p)
+                }
+            })
+            .unwrap_err();
+        assert_eq!(err.to_string(), "kilitli");
+        let mut texts: Vec<_> = q.take_all().unwrap().into_iter().map(|i| i.text).collect();
+        texts.sort();
+        assert_eq!(texts, ["a", "b", "canli"]);
     }
 
     #[test]
