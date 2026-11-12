@@ -2,6 +2,7 @@ pub mod capture;
 pub mod config;
 pub mod duration;
 pub mod host;
+pub mod links;
 pub mod paths;
 pub mod profile;
 pub mod queue;
