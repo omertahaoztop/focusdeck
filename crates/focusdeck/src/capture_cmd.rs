@@ -226,17 +226,41 @@ pub async fn run_remote(
         own,
         own_result: None,
         queued_sent: 0,
+        offset: *now.offset(),
     };
 
     let home = dirs::home_dir().unwrap_or_default();
+    let connect = async {
+        let (client, name) = remote::connect_profile(server, &home, flag, env_profile, cfg).await?;
+        match client.profile(&name).await {
+            Ok(view) => Ok((client, name, view.capture_into)),
+            Err(e) => {
+                let text = client.explain_naming_server(&e);
+                Err(match e {
+                    RemoteError::Network(_) => anyhow::Error::new(remote::Unreachable(text)),
+                    _ => anyhow::anyhow!(text),
+                })
+            }
+        }
+    };
     let connected = tokio::select! {
-        result = remote::connect_profile(server, &home, flag, env_profile, cfg) => Some(result),
+        result = connect => Some(result),
         () = stop.wait() => None,
     };
     let outcome = match connected {
         None => RemoteOutcome::Interrupted,
-        Some(Err(e)) => RemoteOutcome::Unreachable(e.to_string()),
-        Some(Ok((client, profile))) => tokio::select! {
+        Some(Err(e)) => RemoteOutcome::Unreachable {
+            network: e.downcast_ref::<remote::Unreachable>().is_some(),
+            why: e.to_string(),
+        },
+        // the server maps a missing capture_into to INVALID, which would wipe the backlog
+        Some(Ok((_, _, None))) => {
+            if let Some(i) = progress.own {
+                progress.pending.remove(i);
+            }
+            RemoteOutcome::NoCaptureInto
+        }
+        Some(Ok((client, profile, Some(_)))) => tokio::select! {
             () = deliver_remote(&client, &profile, &mut progress, &log) => RemoteOutcome::Done,
             () = stop.wait() => RemoteOutcome::Interrupted,
         },
@@ -260,12 +284,21 @@ pub async fn run_remote(
             }
             1
         }
-        RemoteOutcome::Unreachable(why) => {
+        RemoteOutcome::Unreachable { why, network } => {
             notify::log_line(&log, &why);
             eprintln!("{why}");
             if !failed {
-                notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &note, true);
+                let body = if network {
+                    note
+                } else {
+                    format!("{note}\n{why}")
+                };
+                notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &body, true);
             }
+            1
+        }
+        RemoteOutcome::NoCaptureInto => {
+            eprintln!("{}", t(msg::CAPTURE_NO_CAPTURE_INTO));
             1
         }
         RemoteOutcome::Done => {
@@ -279,7 +312,8 @@ pub async fn run_remote(
 enum RemoteOutcome {
     Done,
     Interrupted,
-    Unreachable(String),
+    Unreachable { why: String, network: bool },
+    NoCaptureInto,
 }
 
 enum OwnResult {
@@ -295,11 +329,16 @@ struct RemoteProgress {
     own: Option<usize>,
     own_result: Option<OwnResult>,
     queued_sent: usize,
+    offset: FixedOffset,
 }
 
-fn shown_text(item: &Item) -> String {
+fn shown_text(item: &Item, offset: &FixedOffset) -> String {
     match item.due {
-        Some(due) => format!("{} · {}", item.title, due.format("%H:%M")),
+        Some(due) => format!(
+            "{} · {}",
+            item.title,
+            due.with_timezone(offset).format("%H:%M")
+        ),
         None => item.title.clone(),
     }
 }
@@ -326,7 +365,10 @@ async fn deliver_remote(
         match result {
             Ok(response) => {
                 if is_own {
-                    progress.own_result = Some(OwnResult::Added(shown_text(&response.item)));
+                    progress.own_result = Some(OwnResult::Added(shown_text(
+                        &response.item,
+                        &progress.offset,
+                    )));
                 } else {
                     progress.queued_sent += 1;
                 }
@@ -335,8 +377,12 @@ async fn deliver_remote(
                 code: ErrorCode::Invalid,
                 message,
             }) => {
-                notify::log_line(log, &format!("the server refused a note: {message}"));
-                notify::send_logged(log, &t(msg::CAPTURE_FAILED_TITLE), &message, true);
+                notify::log_line(
+                    log,
+                    &format!("the server refused a note ({}): {message}", entry.text),
+                );
+                let body = format!("{}\n{message}", entry.text);
+                notify::send_logged(log, &t(msg::CAPTURE_FAILED_TITLE), &body, true);
                 if is_own {
                     progress.own_result = Some(OwnResult::Dropped);
                 }
@@ -345,8 +391,9 @@ async fn deliver_remote(
                 let text = client.explain_naming_server(&e);
                 notify::log_line(log, &text);
                 let server_gone = matches!(e, RemoteError::Network(_) | RemoteError::Unauthorized);
-                if is_own {
-                    let reason = (!matches!(e, RemoteError::Network(_))).then_some(text);
+                let reason = (!matches!(e, RemoteError::Network(_))).then_some(text);
+                // a stop before the own note's turn still tells the user why
+                if is_own || (server_gone && progress.own.is_some_and(|o| o >= progress.popped)) {
                     progress.own_result = Some(OwnResult::Kept(reason));
                 }
                 progress.kept.push(entry);

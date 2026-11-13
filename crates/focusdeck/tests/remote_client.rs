@@ -2,10 +2,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use chrono::{DateTime, Duration, FixedOffset, Local};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use focusdeck::queue::{Queue, Queued};
 use focusdeck_protocol::Item;
-use mockito::{Matcher, Server, ServerGuard};
+use mockito::{Matcher, Mock, Server, ServerGuard};
 use serde_json::{Value, json};
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123";
@@ -35,12 +35,31 @@ fn item(title: &str, due: Option<&str>) -> Value {
     .unwrap()
 }
 
-fn profiles(server: &mut ServerGuard) -> mockito::Mock {
+fn profile_mocks(server: &mut ServerGuard, capture_into: Value) -> Mock {
+    server
+        .mock("GET", "/api/v1/profiles/p")
+        .with_header("content-type", "application/json")
+        .with_body(
+            json!({
+                "name": "p", "capture_into": capture_into, "capture_refs": {},
+                "capture_label_aliases": {}, "capture_words": {}, "boxes": []
+            })
+            .to_string(),
+        )
+        .create();
     server
         .mock("GET", "/api/v1/profiles")
         .with_header("content-type", "application/json")
         .with_body(r#"{"profiles":["p"],"default":"p"}"#)
         .create()
+}
+
+fn profiles(server: &mut ServerGuard) -> Mock {
+    profile_mocks(server, json!("notes"))
+}
+
+fn profiles_without_capture_into(server: &mut ServerGuard) -> Mock {
+    profile_mocks(server, Value::Null)
 }
 
 impl Env {
@@ -108,6 +127,7 @@ impl Env {
             .env_remove("LANG")
             .env_remove("LC_MESSAGES")
             .env("LC_ALL", "C")
+            .env("TZ", "UTC")
             .env("FOCUSDECK_CONFIG_DIR", root.join("config"))
             .env("FOCUSDECK_DATA_DIR", root.join("data"))
             .env("FOCUSDECK_STATE_DIR", self.state_dir())
@@ -170,7 +190,7 @@ fn remote_capture_sends_entry_key() {
     assert!(env.queued().is_empty());
     let log = env.notifications();
     assert!(log.contains("added\t"), "{log}");
-    assert!(log.contains("log at · 14:30"), "{log}");
+    assert!(log.contains("log at · 11:30"), "{log}");
     assert!(!log.contains(TOKEN), "{log}");
 }
 
@@ -192,7 +212,7 @@ fn remote_invalid_capture_is_dropped_from_queue_and_notified() {
     assert!(env.queued().is_empty());
     let log = env.notifications();
     assert!(
-        log.contains("-u\tcritical\t--\tfocusdeck: not added\ttitle is empty\t"),
+        log.contains("-u\tcritical\t--\tfocusdeck: not added\t@ali\ntitle is empty\t"),
         "{log}"
     );
 }
@@ -243,9 +263,8 @@ fn unreachable_server_keeps_note_in_queue() {
 fn rejected_token_keeps_note_queued_and_names_the_server() {
     let mut server = Server::new();
     let env = Env::new(&server.url());
-    let _p = profiles(&mut server);
     let _denied = server
-        .mock("POST", "/api/v1/profiles/p/captures")
+        .mock("GET", "/api/v1/profiles")
         .with_status(401)
         .with_header("content-type", "application/json")
         .with_body(r#"{"error":{"code":"UNAUTHORIZED","message":"no"}}"#)
@@ -254,8 +273,10 @@ fn rejected_token_keeps_note_queued_and_names_the_server() {
     assert_eq!(code(&out), 1);
     assert_eq!(env.queued().len(), 1);
     let log = env.notifications();
-    assert!(log.contains("focusdeck: queued"), "{log}");
+    assert!(log.contains("focusdeck: queued\tnot\n"), "{log}");
+    assert!(log.contains("refused the token"), "{log}");
     assert!(log.contains(&server.host_with_port()), "{log}");
+    assert!(!log.contains(TOKEN), "{log}");
 }
 
 #[test]
@@ -263,11 +284,20 @@ fn remote_remind_prints_due_reminders() {
     let mut server = Server::new();
     let env = Env::new(&server.url());
     let _p = profiles(&mut server);
-    let now = Local::now().fixed_offset();
+    let now = Utc::now().fixed_offset();
     let when = now - Duration::minutes(1);
     let reminders = server
         .mock("GET", "/api/v1/profiles/p/reminders")
-        .match_query(Matcher::Regex("since=.+".into()))
+        .match_query(Matcher::Any)
+        .match_request(move |req| {
+            let query = req.path_and_query().split_once("since=").map(|(_, v)| v);
+            let Some(raw) = query.map(|v| v.split('&').next().unwrap_or_default()) else {
+                return false;
+            };
+            let decoded = raw.replace("%3A", ":").replace("%2B", "+");
+            DateTime::parse_from_rfc3339(&decoded)
+                .is_ok_and(|since| (since - (now - Duration::hours(12))).abs() <= Duration::seconds(60))
+        })
         .with_header("content-type", "application/json")
         .with_body(
             json!({"reminders": [
@@ -290,6 +320,119 @@ fn remote_remind_prints_due_reminders() {
     assert_eq!(log.matches("⏰ toplantı").count(), 1, "{log}");
     assert!(state_has_reminder(&env.state_dir()));
     reminders.assert();
+}
+
+fn refuse(server: &mut ServerGuard, text: &str, status: usize, body: &str, hits: usize) -> Mock {
+    server
+        .mock("POST", "/api/v1/profiles/p/captures")
+        .match_body(Matcher::PartialJson(json!({ "text": text })))
+        .with_status(status)
+        .with_header("content-type", "application/json")
+        .with_body(body)
+        .expect(hits)
+        .create()
+}
+
+fn seeded(text: &str, minute: u32) -> Queued {
+    Queued {
+        text: text.into(),
+        at: at(&format!("2026-11-11T10:{minute:02}:00+03:00")),
+        lang: Some("en".into()),
+        id: Some(format!("{text}-id")),
+    }
+}
+
+const INVALID: &str = r#"{"error":{"code":"INVALID","message":"title is empty"}}"#;
+const BUSY: &str = r#"{"error":{"code":"IN_PROGRESS","message":"still running"}}"#;
+
+#[test]
+fn drain_drops_only_invalid_notes_and_keeps_the_rest_queued() {
+    let mut server = Server::new();
+    let env = Env::new(&server.url());
+    let _p = profiles(&mut server);
+    for (i, name) in ["a", "b", "c"].into_iter().enumerate() {
+        env.queue().push_entry(&seeded(name, i as u32)).unwrap();
+    }
+    let a = refuse(&mut server, "a", 422, INVALID, 1);
+    let b = refuse(&mut server, "b", 409, BUSY, 1);
+    let c = capture_ok(&mut server, Matcher::Any, json!({"text": "c"}), "c");
+    let own = capture_ok(&mut server, Matcher::Any, json!({"text": "yeni"}), "yeni");
+    let out = env.run(&["capture", "yeni"]);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    for mock in [&a, &b] {
+        mock.assert();
+    }
+    c.assert();
+    own.assert();
+    assert_eq!(env.queued(), vec![seeded("b", 1)]);
+    let log = env.notifications();
+    assert!(
+        log.contains("focusdeck: not added\ta\ntitle is empty\t"),
+        "{log}"
+    );
+}
+
+#[test]
+fn a_server_fault_on_the_first_note_keeps_every_note_in_order() {
+    let mut server = Server::new();
+    let env = Env::new(&server.url());
+    let _p = profiles(&mut server);
+    for (i, name) in ["x", "y"].into_iter().enumerate() {
+        env.queue().push_entry(&seeded(name, i as u32)).unwrap();
+    }
+    let x = refuse(
+        &mut server,
+        "x",
+        500,
+        r#"{"error":{"code":"INTERNAL","message":"boom"}}"#,
+        1,
+    );
+    let y = refuse(&mut server, "y", 200, "{}", 0);
+    let z = refuse(&mut server, "z", 200, "{}", 0);
+    let out = env.run(&["capture", "z"]);
+    assert_eq!(code(&out), 1);
+    x.assert();
+    y.assert();
+    z.assert();
+    let queued = env.queued();
+    let texts: Vec<_> = queued.iter().map(|q| q.text.as_str()).collect();
+    assert_eq!(texts, ["x", "y", "z"]);
+    assert_eq!(queued[0], seeded("x", 0));
+    assert_eq!(queued[1], seeded("y", 1));
+    let log = env.notifications();
+    assert!(log.contains("focusdeck: queued\tz\t"), "{log}");
+}
+
+#[test]
+fn profile_without_capture_into_leaves_the_backlog_untouched() {
+    let mut server = Server::new();
+    let env = Env::new(&server.url());
+    let _p = profiles_without_capture_into(&mut server);
+    env.queue().push_entry(&seeded("a", 0)).unwrap();
+    let path = env.state_dir().join("capture-queue.jsonl");
+    let before = std::fs::read_to_string(&path).unwrap();
+    let never = refuse(&mut server, "a", 422, INVALID, 0);
+    let out = env.run(&["capture", "yeni"]);
+    assert_eq!(code(&out), 1);
+    never.assert();
+    assert!(
+        text(&out.stderr).contains("no capture_into"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    assert_eq!(env.queued(), vec![seeded("a", 0)]);
+}
+
+#[test]
+fn shown_time_follows_the_clients_offset() {
+    let mut server = Server::new();
+    let env = Env::new(&server.url());
+    let _p = profiles(&mut server);
+    let _m = capture_ok(&mut server, Matcher::Any, json!({"text": "x"}), "x");
+    assert_eq!(code(&env.run(&["capture", "x"])), 0);
+    let log = env.notifications();
+    assert!(log.contains("added\tx · 11:30\t"), "{log}");
 }
 
 fn state_has_reminder(state_dir: &Path) -> bool {

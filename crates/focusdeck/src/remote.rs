@@ -325,6 +325,18 @@ impl RemoteClient {
     }
 }
 
+/// The server could not be reached or answered with a fault; the text names it.
+#[derive(Debug)]
+pub struct Unreachable(pub String);
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unreachable {}
+
 /// Picks the profile: flag, environment, config, the server's default, then the only one it has.
 pub async fn resolve_profile(
     client: &RemoteClient,
@@ -332,10 +344,13 @@ pub async fn resolve_profile(
     env: Option<&str>,
     cfg: &Config,
 ) -> anyhow::Result<String> {
-    let listed = client
-        .profiles()
-        .await
-        .map_err(|e| anyhow::anyhow!(startup_text(client.address(), &e)))?;
+    let listed = client.profiles().await.map_err(|e| {
+        let text = startup_text(client.address(), &e);
+        match e {
+            RemoteError::Network(_) => anyhow::Error::new(Unreachable(text)),
+            _ => anyhow::anyhow!(text),
+        }
+    })?;
     let name = match profile::select_name(cli, env, cfg) {
         Ok(name) => name,
         Err(ProfileError::NoProfileSelected) => listed
