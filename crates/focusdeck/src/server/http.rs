@@ -15,7 +15,7 @@ use axum::routing::{get, post};
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::board::{Board, BoardError};
@@ -109,7 +109,6 @@ fn respond<T: Serialize>(result: Result<T, BoardError>) -> Response {
     }
 }
 
-// the closed error-code table has no server fault, so this one is spelled out here
 fn internal(e: &io::Error) -> Response {
     eprintln!(
         "{}",
@@ -118,10 +117,7 @@ fn internal(e: &io::Error) -> Response {
             &[("error", e.to_string().as_str().into())]
         )
     );
-    json_response(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        &json!({"error": {"code": "INTERNAL", "message": t(msg::SERVER_INTERNAL)}}),
-    )
+    api_error(ErrorCode::Internal, t(msg::SERVER_INTERNAL))
 }
 
 fn digests_equal(a: &[u8; 32], b: &[u8; 32]) -> bool {

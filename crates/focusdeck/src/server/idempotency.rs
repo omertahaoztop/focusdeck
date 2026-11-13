@@ -11,6 +11,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::fsio::write_atomic;
+use crate::i18n::{msg, t, t_args};
 
 const RETENTION_DAYS: i64 = 90;
 
@@ -77,10 +78,12 @@ impl IdempotencyStore {
                 let file: FileFormat = serde_json::from_slice(&raw)
                     .map_err(|e| invalid(format!("{}: {e}", path.display())))?;
                 if file.version != 1 {
-                    return Err(invalid(format!(
-                        "{}: unsupported version {}",
-                        path.display(),
-                        file.version
+                    return Err(invalid(t_args(
+                        msg::SERVER_STORE_VERSION,
+                        &[
+                            ("path", path.display().to_string().as_str().into()),
+                            ("version", file.version.to_string().as_str().into()),
+                        ],
                     )));
                 }
                 file.keys
@@ -93,8 +96,15 @@ impl IdempotencyStore {
         let mut dropped_in_progress = 0;
         let mut expired = Vec::new();
         for (key, entry) in &keys {
-            let at = DateTime::parse_from_rfc3339(&entry.at)
-                .map_err(|e| invalid(format!("{}: entry time: {e}", path.display())))?;
+            let at = DateTime::parse_from_rfc3339(&entry.at).map_err(|e| {
+                invalid(t_args(
+                    msg::SERVER_STORE_ENTRY_TIME,
+                    &[
+                        ("path", path.display().to_string().as_str().into()),
+                        ("error", e.to_string().as_str().into()),
+                    ],
+                ))
+            })?;
             if entry.state == State::InProgress {
                 dropped_in_progress += 1;
                 expired.push(key.clone());
@@ -153,7 +163,7 @@ impl IdempotencyStore {
         let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
         let mut next = keys.clone();
         let entry = next.get_mut(key).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "idempotency key not claimed")
+            io::Error::new(io::ErrorKind::NotFound, t(msg::SERVER_KEY_NOT_CLAIMED))
         })?;
         entry.state = State::Done;
         entry.response = Some(response.clone());

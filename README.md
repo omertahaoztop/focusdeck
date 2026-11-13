@@ -206,12 +206,12 @@ token_file = "~/.config/focusdeck/secrets/server-token"
 ```
 
 - `listen`: the address to bind. It defaults to `127.0.0.1:8740`, so the server is not reachable from outside until you put a proxy in front of it or choose another address.
-- `token_file`: the file that holds the bearer token. It must be at least 32 characters and readable by its owner only (mode 0600), like the `*_file` keys of a profile.
+- `token_file`: the file that holds the bearer token. It must be at least 32 characters of visible ASCII (no spaces) and readable by its owner only (mode 0600), like the `*_file` keys of a profile.
 
 Create the token once, and copy the same file to every client:
 
 ```sh
-install -m 600 /dev/null ~/.config/focusdeck/secrets/server-token
+install -D -m 600 /dev/null ~/.config/focusdeck/secrets/server-token
 openssl rand -hex 32 > ~/.config/focusdeck/secrets/server-token
 ```
 
@@ -235,13 +235,13 @@ token_file = "~/.config/focusdeck/secrets/server-token"
 - `token_file` follows the same rules as on the server.
 - Each request times out after 20 seconds.
 
-With a `[server]` section, the TUI, `capture` and `remind` talk to the server. The profile is chosen as usual (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`), and when none is given the client takes the server's default profile or its only one. From the server come the profile (boxes, layout, `capture_into`, `capture_refs`, `capture_label_aliases`), the items of every box and the result of every action, drop and capture. The `plan_into` link runs only on the server, so two clients never create it twice. Reminders are fetched from the server, but which ones were already shown is tracked per machine in its own `reminded.json`. Local `profiles/`, installed plugins and `local.json` are not used while `[server]` is set.
+With a `[server]` section, the TUI, `capture` and `remind` talk to the server. The profile is chosen as usual (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`), and when none is given the client takes the server's default profile or its only one. From the server come the profile (boxes, layout, `capture_into`, `capture_refs`, `capture_label_aliases`, `capture_words`), the items of every box and the result of every action, drop and capture. A local `[capture_words]` is ignored in client mode. The `plan_into` link runs only on the server and closes the linked tasks there, so two clients never finish the same task twice. Reminders are fetched from the server, but which ones were already shown is tracked per machine in its own `reminded.json`. Local `profiles/`, installed plugins and `local.json` are not used while `[server]` is set.
 
-`capture` writes the note to its queue first. If the server is unreachable the note stays there and goes out with the next successful capture. A note leaves the queue for good only when the server answers `INVALID`.
+`capture` writes the note to its queue first. If the server is unreachable the note stays there and goes out with the next successful capture. A note leaves the queue for good only when the server answers `INVALID`. If the selected profile has no `capture_into`, the note stays queued and you are told why.
 
 Without a `[server]` section focusdeck works locally exactly as before.
 
-The API never returns the `config` table of a box, `*_file` paths, emails or plugin URLs, and the token is never written to the log or to an error message.
+The API never returns the `config` table of a box or the paths of its secret files. Plugin error text is passed on unchanged, and the token is never written to the log or to an error message.
 
 ### API
 
@@ -257,7 +257,7 @@ Every request carries `Authorization: Bearer <token>`. Bodies and answers are JS
 | `POST` | `/api/v1/profiles/{p}/captures` | `text`, `at`, `lang`: the server parses the note and files it into `capture_into` |
 | `GET` | `/api/v1/profiles/{p}/reminders?since=<RFC 3339>` | reminders of all boxes since that time |
 
-`drops` and `captures` take an `Idempotency-Key` header. A repeated key with the same body returns the first answer instead of doing the work twice. Keys are kept for 90 days.
+`drops` and `captures` take an `Idempotency-Key` header. A repeated key with the same body returns the first answer instead of doing the work twice. Keys older than 90 days are dropped when the server starts.
 
 An error has the status below and the body `{"error": {"code": "...", "message": "..."}}`:
 

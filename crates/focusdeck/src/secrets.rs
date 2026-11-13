@@ -14,6 +14,7 @@ pub enum SecretError {
         source: std::io::Error,
     },
     TokenTooShort(PathBuf),
+    TokenInvalid(PathBuf),
 }
 
 impl SecretError {
@@ -38,6 +39,10 @@ impl SecretError {
                 msg::ERROR_TOKEN_TOO_SHORT,
                 &[("path", path.display().to_string().as_str().into())],
             ),
+            SecretError::TokenInvalid(path) => l.t_args(
+                msg::ERROR_TOKEN_INVALID,
+                &[("path", path.display().to_string().as_str().into())],
+            ),
         }
     }
 }
@@ -50,6 +55,7 @@ impl SecretError {
             SecretError::Exposed(_) => msg::BOARD_SECRET_EXPOSED,
             SecretError::Unreadable { .. } => msg::BOARD_SECRET_UNREADABLE,
             SecretError::TokenTooShort(_) => msg::BOARD_SECRET_TOKEN_SHORT,
+            SecretError::TokenInvalid(_) => msg::BOARD_SECRET_TOKEN_INVALID,
         })
     }
 }
@@ -119,6 +125,9 @@ pub fn read_token(file: &str, home: &Path) -> Result<String, SecretError> {
     let token = text.trim_end_matches(['\r', '\n']);
     if token.chars().count() < MIN_TOKEN_LEN {
         return Err(SecretError::TokenTooShort(path));
+    }
+    if !token.bytes().all(|b| (0x21..=0x7E).contains(&b)) {
+        return Err(SecretError::TokenInvalid(path));
     }
     Ok(token.to_string())
 }
@@ -318,6 +327,27 @@ mod tests {
 
         let err = read_token("~/yok", home.path()).unwrap_err();
         assert!(matches!(err, SecretError::Missing(_)));
+    }
+
+    #[test]
+    fn read_token_rejects_characters_a_header_cannot_carry() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("t");
+        for token in [
+            "abcdefghijklmnopqrstuvwxyzşifre0123",
+            "abcdefghijklmnop qrstuvwxyz0123456789",
+        ] {
+            write_token(&path, token, 0o600);
+            let err = read_token("~/t", home.path()).unwrap_err();
+            assert!(matches!(err, SecretError::TokenInvalid(_)));
+            let tr = i18n::localizer(Some("tr"));
+            for text in [err.to_string(), err.localized(&tr), err.without_path(&tr)] {
+                assert!(
+                    !text.contains("qrstuvwxyz") && !text.contains("şifre"),
+                    "{text}"
+                );
+            }
+        }
     }
 
     #[test]

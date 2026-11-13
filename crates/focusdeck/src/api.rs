@@ -1,4 +1,5 @@
 use crate::config::CaptureWords;
+use crate::i18n::{msg, t};
 use crate::profile::{BoxSpec, Profile};
 use chrono::{DateTime, FixedOffset};
 use focusdeck_protocol::{Describe, Item};
@@ -70,7 +71,7 @@ impl BoxView {
             col: self.col,
             width: self.width,
             height: self.height,
-            refresh: Duration::from_secs(self.refresh),
+            refresh: Duration::from_secs(self.refresh.max(1)),
             plan_into: self.plan_into.clone(),
             config: toml::Table::new(),
         }
@@ -91,7 +92,7 @@ impl ProfileView {
             .map(|spec| {
                 let describe = describes
                     .next()
-                    .unwrap_or_else(|| Err("describe unavailable".to_string()));
+                    .unwrap_or_else(|| Err(t(msg::REMOTE_DESCRIBE_UNAVAILABLE)));
                 BoxView::from_spec(spec, describe)
             })
             .collect();
@@ -177,6 +178,7 @@ pub enum ErrorCode {
     Plugin,
     InProgress,
     KeyReused,
+    Internal,
 }
 
 impl ErrorCode {
@@ -187,6 +189,7 @@ impl ErrorCode {
             ErrorCode::Invalid | ErrorCode::Unsupported | ErrorCode::KeyReused => 422,
             ErrorCode::Plugin => 502,
             ErrorCode::InProgress => 409,
+            ErrorCode::Internal => 500,
         }
     }
 }
@@ -290,6 +293,7 @@ email = "a@b""#,
             (ErrorCode::Plugin, 502),
             (ErrorCode::InProgress, 409),
             (ErrorCode::KeyReused, 422),
+            (ErrorCode::Internal, 500),
         ];
         for (code, status) in expected {
             assert_eq!(code.status(), status);
@@ -304,6 +308,13 @@ email = "a@b""#,
             serde_json::to_string(&body).unwrap(),
             r#"{"error":{"code":"PLUGIN","message":"x"}}"#
         );
+    }
+
+    #[test]
+    fn zero_refresh_from_the_wire_becomes_one_second() {
+        let mut view = BoxView::from_spec(&spec(Default::default()), Ok(describe()));
+        view.refresh = 0;
+        assert_eq!(view.to_spec().refresh, Duration::from_secs(1));
     }
 
     #[test]

@@ -206,12 +206,12 @@ token_file = "~/.config/focusdeck/secrets/server-token"
 ```
 
 - `listen`: dinlenecek adres. Varsayılan `127.0.0.1:8740` olduğundan önüne bir vekil sunucu koymadıkça ya da başka bir adres seçmedikçe sunucuya dışarıdan erişilmez.
-- `token_file`: taşıyıcı token'ı tutan dosya. En az 32 karakter olmalı ve yalnız sahibi okuyabilmeli (0600). Profildeki `*_file` anahtarlarıyla aynı kural geçerlidir.
+- `token_file`: taşıyıcı token'ı tutan dosya. En az 32 karakter olmalı, yalnız görünür ASCII karakterler (boşluksuz) içermeli ve yalnız sahibi okuyabilmeli (0600). Profildeki `*_file` anahtarlarıyla aynı kural geçerlidir.
 
 Token'ı bir kez üret, aynı dosyayı her istemciye kopyala:
 
 ```sh
-install -m 600 /dev/null ~/.config/focusdeck/secrets/server-token
+install -D -m 600 /dev/null ~/.config/focusdeck/secrets/server-token
 openssl rand -hex 32 > ~/.config/focusdeck/secrets/server-token
 ```
 
@@ -231,17 +231,17 @@ url = "https://deck.example.com"
 token_file = "~/.config/focusdeck/secrets/server-token"
 ```
 
-- `url` `https://` olmalıdır. Düz `http://` yalnız deneme için `127.0.0.1`, `[::1]` ve `localhost` adreslerinde kabul edilir.
+- `url` `https://` olmalı. Düz `http://` yalnız deneme için `127.0.0.1`, `[::1]` ve `localhost` adreslerinde kabul edilir.
 - `token_file` sunucudaki kurallara uyar.
 - Her istek 20 saniyede zaman aşımına uğrar.
 
-`[server]` bölümü varsa TUI, `capture` ve `remind` sunucuyla konuşur. Profil her zamanki gibi seçilir (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`), hiçbiri verilmemişse istemci sunucunun varsayılan profilini ya da tek profilini alır. Sunucudan profil (kutular, yerleşim, `capture_into`, `capture_refs`, `capture_label_aliases`), her kutunun öğeleri ve her eylemin, bırakmanın ve yakalamanın sonucu gelir. `plan_into` bağlantısı yalnız sunucuda çalışır, böylece iki istemci aynı bağlantıyı iki kez kurmaz. Hatırlatmalar sunucudan alınır, hangilerinin gösterildiği ise makine başına kendi `reminded.json` dosyasında tutulur. `[server]` varken yerel `profiles/`, kurulu plugin'ler ve `local.json` kullanılmaz.
+`[server]` bölümü varsa TUI, `capture` ve `remind` sunucuyla konuşur. Profil her zamanki gibi seçilir (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`), hiçbiri verilmemişse istemci sunucunun varsayılan profilini ya da tek profilini alır. Sunucudan profil (kutular, yerleşim, `capture_into`, `capture_refs`, `capture_label_aliases`, `capture_words`), her kutunun öğeleri ve her eylemin, bırakmanın ve yakalamanın sonucu gelir. Yerel `[capture_words]` istemci kipinde yok sayılır. `plan_into` bağlantısı yalnız sunucuda çalışır ve bağlı görevleri orada kapatır, böylece iki istemci aynı görevi iki kez bitirmez. Hatırlatmalar sunucudan alınır, hangilerinin gösterildiği ise makine başına kendi `reminded.json` dosyasında tutulur. `[server]` varken yerel `profiles/`, kurulu plugin'ler ve `local.json` kullanılmaz.
 
-`capture` notu önce kendi kuyruğuna yazar. Sunucuya ulaşılamazsa not orada bekler ve sonraki başarılı yakalamada gider. Not kuyruktan yalnız sunucu `INVALID` cevabı verirse kalıcı olarak çıkar.
+`capture` notu önce kendi kuyruğuna yazar. Sunucuya ulaşılamazsa not orada bekleyip sonraki başarılı yakalamada gider. Not kuyruktan yalnız sunucu `INVALID` cevabı verirse kalıcı olarak çıkar. Seçili profilde `capture_into` yoksa not kuyrukta kalır, nedeni de ekrana bildirilir.
 
 `[server]` bölümü yoksa focusdeck eskisi gibi yerelde çalışır.
 
-API bir kutunun `config` tablosunu, `*_file` yollarını, e-posta adreslerini ve plugin URL'lerini hiç döndürmez. Token da log'a ya da hata metnine yazılmaz.
+API bir kutunun `config` tablosunu ve gizli dosyalarının yollarını hiç döndürmez. Plugin hata metni değiştirilmeden iletilir. Token da log'a ya da hata metnine yazılmaz.
 
 ### API
 
@@ -257,7 +257,7 @@ Her istek `Authorization: Bearer <token>` başlığını taşır. Gövdeler ve c
 | `POST` | `/api/v1/profiles/{p}/captures` | `text`, `at`, `lang`: sunucu notu çözümler ve `capture_into` kutusuna koyar |
 | `GET` | `/api/v1/profiles/{p}/reminders?since=<RFC 3339>` | o andan beri bütün kutuların hatırlatmaları |
 
-`drops` ve `captures` `Idempotency-Key` başlığını alır. Aynı gövdeyle tekrarlanan anahtar işi ikinci kez yapmaz, ilk cevabı döndürür. Anahtarlar 90 gün saklanır.
+`drops` ve `captures` `Idempotency-Key` başlığını alır. Aynı gövdeyle tekrarlanan anahtar işi ikinci kez yapmaz, ilk cevabı döndürür. 90 günden eski anahtarlar sunucu başlarken silinir.
 
 Hata aşağıdaki durum koduyla ve `{"error": {"code": "...", "message": "..."}}` gövdesiyle gelir:
 
