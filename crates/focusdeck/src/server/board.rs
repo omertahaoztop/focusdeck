@@ -835,6 +835,7 @@ mod tests {
         let refresh = Duration::from_secs(1);
         let p = profile("p", vec![spec("a", "fake", refresh, None)], None);
         let board = board(vec![("p", p, vec![Ok(env.host("a"))])]);
+        board.profile_view("p").await.unwrap();
         let t0 = Instant::now();
         board.items("p", "a", now()).await.unwrap();
         tokio::time::sleep_until((t0 + refresh / 2).into()).await;
