@@ -13,6 +13,8 @@ pub enum SecretError {
         path: PathBuf,
         source: std::io::Error,
     },
+    TokenTooShort(PathBuf),
+    TokenInvalid(PathBuf),
 }
 
 impl SecretError {
@@ -33,7 +35,28 @@ impl SecretError {
                     ("error", source.to_string().as_str().into()),
                 ],
             ),
+            SecretError::TokenTooShort(path) => l.t_args(
+                msg::ERROR_TOKEN_TOO_SHORT,
+                &[("path", path.display().to_string().as_str().into())],
+            ),
+            SecretError::TokenInvalid(path) => l.t_args(
+                msg::ERROR_TOKEN_INVALID,
+                &[("path", path.display().to_string().as_str().into())],
+            ),
         }
+    }
+}
+
+impl SecretError {
+    /// Same failure without the file name, for text that leaves the machine.
+    pub fn without_path(&self, l: &Localizer) -> String {
+        l.t(match self {
+            SecretError::Missing(_) => msg::BOARD_SECRET_MISSING,
+            SecretError::Exposed(_) => msg::BOARD_SECRET_EXPOSED,
+            SecretError::Unreadable { .. } => msg::BOARD_SECRET_UNREADABLE,
+            SecretError::TokenTooShort(_) => msg::BOARD_SECRET_TOKEN_SHORT,
+            SecretError::TokenInvalid(_) => msg::BOARD_SECRET_TOKEN_INVALID,
+        })
     }
 }
 
@@ -88,6 +111,25 @@ fn expand_home(s: &str, home: &Path) -> PathBuf {
         Some(rest) => home.join(rest),
         None => PathBuf::from(s),
     }
+}
+
+pub const MIN_TOKEN_LEN: usize = 32;
+
+pub fn read_token(file: &str, home: &Path) -> Result<String, SecretError> {
+    let path = expand_home(file, home);
+    check_secret(&path)?;
+    let text = std::fs::read_to_string(&path).map_err(|source| SecretError::Unreadable {
+        path: path.clone(),
+        source,
+    })?;
+    let token = text.trim_end_matches(['\r', '\n']);
+    if token.chars().count() < MIN_TOKEN_LEN {
+        return Err(SecretError::TokenTooShort(path));
+    }
+    if !token.bytes().all(|b| (0x21..=0x7E).contains(&b)) {
+        return Err(SecretError::TokenInvalid(path));
+    }
+    Ok(token.to_string())
 }
 
 fn check_secret(path: &Path) -> Result<(), SecretError> {
@@ -258,5 +300,71 @@ mod tests {
         write_secret(&home.path().join("v"), 0o644);
         let err = plugin_config(&spec("token_file = \"~/v\""), home.path()).unwrap_err();
         assert!(!err.to_string().contains("super-secret-value"));
+    }
+
+    fn write_token(path: &Path, text: &str, mode: u32) {
+        fs::write(path, text).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn read_token_rejects_short_and_exposed() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("t");
+        write_token(&path, &"a".repeat(31), 0o600);
+        let err = read_token("~/t", home.path()).unwrap_err();
+        assert!(matches!(&err, SecretError::TokenTooShort(p) if *p == path));
+
+        let long = "abcdefghijklmnopqrstuvwxyz012345";
+        write_token(&path, long, 0o644);
+        let err = read_token("~/t", home.path()).unwrap_err();
+        assert!(matches!(err, SecretError::Exposed(_)));
+
+        write_token(&path, &format!("{long}\n"), 0o600);
+        assert_eq!(read_token("~/t", home.path()).unwrap(), long);
+        write_token(&path, &format!("{long}\r\n"), 0o600);
+        assert_eq!(read_token("~/t", home.path()).unwrap(), long);
+
+        let err = read_token("~/yok", home.path()).unwrap_err();
+        assert!(matches!(err, SecretError::Missing(_)));
+    }
+
+    #[test]
+    fn read_token_rejects_characters_a_header_cannot_carry() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("t");
+        for token in [
+            "abcdefghijklmnopqrstuvwxyzşifre0123",
+            "abcdefghijklmnop qrstuvwxyz0123456789",
+        ] {
+            write_token(&path, token, 0o600);
+            let err = read_token("~/t", home.path()).unwrap_err();
+            assert!(matches!(err, SecretError::TokenInvalid(_)));
+            let tr = i18n::localizer(Some("tr"));
+            for text in [err.to_string(), err.localized(&tr), err.without_path(&tr)] {
+                assert!(
+                    !text.contains("qrstuvwxyz") && !text.contains("şifre"),
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn token_error_text_has_no_token() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("t");
+        let short = "shorttoken-must-not-leak";
+        write_token(&path, short, 0o600);
+        let err = read_token("~/t", home.path()).unwrap_err();
+        assert!(matches!(err, SecretError::TokenTooShort(_)));
+        assert!(!err.to_string().contains(short));
+        assert!(err.to_string().contains(path.to_str().unwrap()));
+        let tr = i18n::localizer(Some("tr"));
+        assert!(!err.localized(&tr).contains(short));
+
+        write_token(&path, &format!("{short}{short}"), 0o644);
+        let err = read_token("~/t", home.path()).unwrap_err();
+        assert!(!err.to_string().contains(short));
     }
 }

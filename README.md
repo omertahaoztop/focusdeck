@@ -17,7 +17,7 @@ The data in the screenshots is made up.
 ## Install
 
 ```sh
-cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.3.0 --locked focusdeck
+cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.4.0 --locked focusdeck
 ```
 
 Ready-made plugins live in the [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) repository and are installed from its index:
@@ -68,6 +68,8 @@ minute = ["mins"]
 - `default_profile`: the profile used when neither `--profile` nor `FOCUSDECK_PROFILE` is given.
 - `registries`: plugin index URLs, in order. If the same name appears in two indexes, the earlier one wins. Add your own index or a fork here.
 - `capture_command`: the command run to ask for one line when `capture` is called without text.
+- `[serve]`: `listen` and `token_file`, for `focusdeck server` (see [Server](#server)).
+- `[server]`: `url` and `token_file`, to use a server instead of local profiles (see [Server](#server)).
 
 ## Profile
 
@@ -190,6 +192,85 @@ focusdeck remind --send
 ```
 
 Asks plugins that support reminders for the reminders of the last 12 hours. `remind` prints the ones that are due; `--send` shows them as notifications through `notify-send -u critical`. Shown reminders are recorded in `~/.local/state/focusdeck/reminded.json` and never shown again. A systemd timer or cron entry can run `focusdeck remind --send` every minute.
+
+## Server
+
+`focusdeck server` runs the boxes on one machine and lets other machines, or an app, use them over HTTPS. The server owns the profiles, the plugins, their secrets and `local.json`. A client shows the same boxes without any of those.
+
+Server side, in `config.toml`:
+
+```toml
+[serve]
+listen = "127.0.0.1:8740"
+token_file = "~/.config/focusdeck/secrets/server-token"
+```
+
+- `listen`: the address to bind. It defaults to `127.0.0.1:8740`, so the server is not reachable from outside until you put a proxy in front of it or choose another address.
+- `token_file`: the file that holds the bearer token. It must be at least 32 characters of visible ASCII (no spaces) and readable by its owner only (mode 0600), like the `*_file` keys of a profile.
+
+Create the token once, and copy the same file to every client:
+
+```sh
+install -D -m 600 /dev/null ~/.config/focusdeck/secrets/server-token
+openssl rand -hex 32 > ~/.config/focusdeck/secrets/server-token
+```
+
+Then run `focusdeck server`. The server does not speak TLS itself. A reverse proxy such as Caddy terminates it:
+
+```
+deck.example.com {
+    reverse_proxy 127.0.0.1:8740
+}
+```
+
+Client side, in `config.toml`:
+
+```toml
+[server]
+url = "https://deck.example.com"
+token_file = "~/.config/focusdeck/secrets/server-token"
+```
+
+- `url` must be `https://`. Plain `http://` is accepted only for `127.0.0.1`, `[::1]` and `localhost`, for testing.
+- `token_file` follows the same rules as on the server.
+- Each request times out after 20 seconds.
+
+With a `[server]` section, the TUI, `capture` and `remind` talk to the server. The profile is chosen as usual (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`), and when none is given the client takes the server's default profile or its only one. From the server come the profile (boxes, layout, `capture_into`, `capture_refs`, `capture_label_aliases`, `capture_words`), the items of every box and the result of every action, drop and capture. A local `[capture_words]` is ignored in client mode. The `plan_into` link runs only on the server and closes the linked tasks there, so two clients never finish the same task twice. Reminders are fetched from the server, but which ones were already shown is tracked per machine in its own `reminded.json`. Local `profiles/`, installed plugins and `local.json` are not used while `[server]` is set.
+
+`capture` writes the note to its queue first. If the server is unreachable the note stays there and goes out with the next successful capture. A note leaves the queue for good only when the server answers `INVALID`. If the selected profile has no `capture_into`, the note stays queued and you are told why.
+
+Without a `[server]` section focusdeck works locally exactly as before.
+
+The API never returns the `config` table of a box or the paths of its secret files. Plugin error text is passed on unchanged, and the token is never written to the log or to an error message.
+
+### API
+
+Every request carries `Authorization: Bearer <token>`. Bodies and answers are JSON with snake_case fields, and a request body is limited to 1 MiB.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/profiles` | profile names and the default one |
+| `GET` | `/api/v1/profiles/{p}` | the profile view: capture settings and its boxes with their `describe` result |
+| `GET` | `/api/v1/profiles/{p}/boxes/{b}/items` | the box's items and when they were listed |
+| `POST` | `/api/v1/profiles/{p}/boxes/{b}/actions` | `item`, `action`, `args`: `done`, `delete`, `move`, `reorder`, `unstar` |
+| `POST` | `/api/v1/profiles/{p}/boxes/{b}/drops` | `item`, `from`: drop an item from another box |
+| `POST` | `/api/v1/profiles/{p}/captures` | `text`, `at`, `lang`: the server parses the note and files it into `capture_into` |
+| `GET` | `/api/v1/profiles/{p}/reminders?since=<RFC 3339>` | reminders of all boxes since that time |
+
+`drops` and `captures` take an `Idempotency-Key` header. A repeated key with the same body and target returns the first answer instead of doing the work twice; the same key sent to another box or profile gets `KEY_REUSED`. Once a request has its key, the work finishes even if the client hangs up, so a retry gets the stored answer. Keys older than 90 days are dropped when the server starts and whenever a new key is stored.
+
+An error has the status below and the body `{"error": {"code": "...", "message": "..."}}`:
+
+| Code | Status | Meaning |
+|---|---|---|
+| `UNAUTHORIZED` | 401 | missing or wrong token |
+| `NOT_FOUND` | 404 | unknown profile or box; also a bad path or a wrong method |
+| `INVALID` | 422 | the body, the query or the `Idempotency-Key` is malformed, or the note cannot be filed |
+| `UNSUPPORTED` | 422 | the box's plugin does not support this action |
+| `PLUGIN` | 502 | the plugin failed or did not answer |
+| `IN_PROGRESS` | 409 | a request with the same `Idempotency-Key` is still running |
+| `KEY_REUSED` | 422 | the `Idempotency-Key` was used with a different body or target |
+| `INTERNAL` | 500 | the server could not save its own state |
 
 ## Plugin protocol
 

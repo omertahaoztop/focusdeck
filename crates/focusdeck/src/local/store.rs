@@ -1,10 +1,8 @@
 //! The `local` box's note file: one JSON document guarded by a lock file.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, FixedOffset};
 use focusdeck_i18n::Localizer;
@@ -12,12 +10,11 @@ use focusdeck_protocol::{Link, Source};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::fsio;
 use crate::i18n::{self, msg};
 use crate::paths::Paths;
 
 const FORMAT_VERSION: u32 = 1;
-
-static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Record {
@@ -193,42 +190,14 @@ impl Store {
     }
 
     fn write(&self, data: &FileData) -> Result<(), StoreError> {
-        let tmp = self.sibling(".tmp");
-        let save = || -> io::Result<()> {
-            let mut options = OpenOptions::new();
-            options.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-            let mut file = options.open(&tmp)?;
-            serde_json::to_writer_pretty(&mut file, data)?;
-            file.flush()?;
-            file.sync_all()?;
-            fs::rename(&tmp, &self.path)?;
-            #[cfg(unix)]
-            if let Some(parent) = self.path.parent() {
-                File::open(parent)?.sync_all()?;
-            }
-            Ok(())
-        };
-        save().map_err(|error| {
-            let _ = fs::remove_file(&tmp);
-            Self::io_error(&self.path, error)
-        })
+        let bytes = serde_json::to_vec_pretty(data)
+            .map_err(|error| Self::io_error(&self.path, error.into()))?;
+        fsio::write_atomic(&self.path, &bytes).map_err(|error| Self::io_error(&self.path, error))
     }
 }
 
 pub fn new_id(existing: &[Record]) -> String {
-    new_id_with(existing, || {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        format!(
-            "{:x}{:x}{:x}",
-            nanos,
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        )
-    })
+    new_id_with(existing, fsio::unique_id)
 }
 
 fn new_id_with(existing: &[Record], mut candidate: impl FnMut() -> String) -> String {

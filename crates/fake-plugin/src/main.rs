@@ -1,7 +1,9 @@
-//! Test plugin driven by FAKE_MODE_FILE or FAKE_MODE (raw-* modes break the protocol); writes FAKE_LOG, FAKE_LANG_LOG, FAKE_START_LOG, FAKE_PID_LOG; reminders from FAKE_REMINDERS_FILE.
+//! Test plugin driven by FAKE_MODE_FILE or FAKE_MODE (raw-* modes break the protocol); writes FAKE_LOG, FAKE_LANG_LOG, FAKE_START_LOG, FAKE_PID_LOG; reminders from FAKE_REMINDERS_FILE, list items from FAKE_ITEMS_FILE.
 
 use std::fs::OpenOptions;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use focusdeck_protocol::{
@@ -12,6 +14,51 @@ use serde_json::{Value, json};
 
 struct Fake;
 
+// lines the reader thread has taken off stdin versus requests the plugin has started on
+static RECEIVED: AtomicUsize = AtomicUsize::new(0);
+static STARTED: AtomicUsize = AtomicUsize::new(0);
+
+fn started() {
+    STARTED.fetch_add(1, Ordering::SeqCst);
+}
+
+struct Lines(mpsc::Receiver<Vec<u8>>, Vec<u8>);
+
+impl Read for Lines {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if self.1.is_empty() {
+            match self.0.recv() {
+                Ok(line) => self.1 = line,
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = out.len().min(self.1.len());
+        out[..n].copy_from_slice(&self.1[..n]);
+        self.1.drain(..n);
+        Ok(n)
+    }
+}
+
+fn stdin_lines() -> BufReader<Lines> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut stdin = io::stdin().lock();
+        loop {
+            let mut line = Vec::new();
+            match stdin.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {
+                    RECEIVED.fetch_add(1, Ordering::SeqCst);
+                    if tx.send(line).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    BufReader::new(Lines(rx, Vec::new()))
+}
+
 fn mode() -> String {
     if let Ok(path) = std::env::var("FAKE_MODE_FILE")
         && let Ok(text) = std::fs::read_to_string(path)
@@ -19,6 +66,14 @@ fn mode() -> String {
         return text.trim().to_string();
     }
     std::env::var("FAKE_MODE").unwrap_or_else(|_| "ok".into())
+}
+
+fn log_line(line: &str) {
+    if let Ok(path) = std::env::var("FAKE_LOG")
+        && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
 }
 
 fn item(id: &str, title: &str) -> Item {
@@ -39,6 +94,7 @@ fn item(id: &str, title: &str) -> Item {
 
 impl Plugin for Fake {
     fn describe(&self) -> Describe {
+        started();
         Describe {
             name: "fake".into(),
             version: "0.1.0".into(),
@@ -54,6 +110,7 @@ impl Plugin for Fake {
     }
 
     fn configure(&mut self, config: Value) -> Result<(), String> {
+        started();
         if let Ok(path) = std::env::var("FAKE_LOG") {
             let mut file = OpenOptions::new()
                 .create(true)
@@ -66,7 +123,19 @@ impl Plugin for Fake {
     }
 
     fn list(&mut self, _p: ListParams) -> Result<Vec<Item>, String> {
+        started();
+        log_line("list");
         match mode().as_str() {
+            "empty" => Ok(vec![]),
+            _ if std::env::var_os("FAKE_ITEMS_FILE").is_some() => {
+                let path = std::env::var("FAKE_ITEMS_FILE").unwrap_or_default();
+                let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                serde_json::from_str(&text).map_err(|e| e.to_string())
+            }
+            "slow-list" => {
+                std::thread::sleep(Duration::from_millis(400));
+                Ok(vec![item("1", "birinci"), item("2", "ikinci")])
+            }
             "hang" => {
                 std::thread::sleep(Duration::from_secs(60));
                 Ok(vec![])
@@ -86,11 +155,22 @@ impl Plugin for Fake {
         }
     }
 
-    fn action(&mut self, _p: ActionParams) -> Result<Option<Item>, String> {
+    fn action(&mut self, p: ActionParams) -> Result<Option<Item>, String> {
+        let this = STARTED.fetch_add(1, Ordering::SeqCst) + 1;
+        if mode() == "slow-action" {
+            std::thread::sleep(Duration::from_millis(300));
+            // a request already waiting on stdin means the host sent it before this one was answered
+            if RECEIVED.load(Ordering::SeqCst) > this {
+                log_line("overlap");
+                return Err("overlap".into());
+            }
+        }
+        log_line(&format!("action {} {}", p.item, p.action));
         Ok(None)
     }
 
     fn reminders(&mut self, _p: RemindersParams) -> Result<Vec<Reminder>, String> {
+        started();
         if mode() == "fail-reminders" {
             return Err("reminders are unavailable".into());
         }
@@ -104,6 +184,7 @@ impl Plugin for Fake {
     }
 
     fn drop_item(&mut self, p: DropParams) -> Result<Item, String> {
+        started();
         let mode = mode();
         if mode == "crash" || mode.strip_prefix("crash-on:") == Some(p.item.title.as_str()) {
             std::process::exit(3);
@@ -147,7 +228,7 @@ fn main() -> io::Result<()> {
     if mode.starts_with("raw-") {
         return raw(&mode);
     }
-    serve(Fake, io::stdin().lock(), io::stdout())
+    serve(Fake, stdin_lines(), io::stdout())
 }
 
 // raw-* modes: answers describe and configure like serve does, then breaks the protocol on the first other request

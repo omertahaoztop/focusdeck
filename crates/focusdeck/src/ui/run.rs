@@ -2,6 +2,7 @@
 
 use std::io::{Stdout, stdout};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -26,15 +27,17 @@ use tokio::time::MissedTickBehavior;
 
 use super::app::{App, Effect};
 use super::{layout, render};
+use crate::api::ProfileView;
 use crate::capture;
 use crate::config::Config;
-use crate::host::PluginHost;
+use crate::host::{BoxHost, PluginHost};
 use crate::i18n::{self, msg, t, t_args};
 use crate::install;
 use crate::links::openable;
 use crate::local::LOCAL;
 use crate::paths::Paths;
 use crate::profile::Profile;
+use crate::remote::{RemoteBox, RemoteClient};
 use crate::secrets;
 use crate::worker::{self, BoxCmd, BoxEvent};
 
@@ -248,27 +251,61 @@ fn open_url(app: &mut App, url: &str) {
     }
 }
 
+#[derive(Debug)]
+pub enum BuildError {
+    Secret(crate::secrets::SecretError),
+    Other(String),
+}
+
+impl BuildError {
+    /// The text safe to hand to API clients: it never names a secret file.
+    pub fn public(&self) -> String {
+        match self {
+            BuildError::Secret(e) => e.without_path(i18n::current()),
+            BuildError::Other(message) => message.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for BuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildError::Secret(e) => e.fmt(f),
+            BuildError::Other(message) => f.write_str(message),
+        }
+    }
+}
+
 pub fn build_host(
     paths: &Paths,
     home: &std::path::Path,
     spec: &crate::profile::BoxSpec,
 ) -> Result<PluginHost, String> {
-    install::validate_name(&spec.plugin).map_err(|e| e.to_string())?;
+    build_host_typed(paths, home, spec).map_err(|e| e.to_string())
+}
+
+pub fn build_host_typed(
+    paths: &Paths,
+    home: &std::path::Path,
+    spec: &crate::profile::BoxSpec,
+) -> Result<PluginHost, BuildError> {
+    let other = |e: &dyn std::fmt::Display| BuildError::Other(e.to_string());
+    install::validate_name(&spec.plugin).map_err(|e| other(&e))?;
     let (exe, args) = if spec.plugin == LOCAL {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe = std::env::current_exe().map_err(|e| other(&e))?;
         (exe, vec!["serve-local".to_owned()])
     } else {
         let exe = paths.plugin_dir().join(&spec.plugin);
         if !exe.is_file() {
-            return Err(t_args(
+            return Err(BuildError::Other(t_args(
                 msg::ERROR_PLUGIN_NOT_INSTALLED,
                 &[("plugin", spec.plugin.as_str().into())],
-            ));
+            )));
         }
-        install::verify_installed(&paths.plugin_dir(), &spec.plugin).map_err(|e| e.to_string())?;
+        install::verify_installed(&paths.plugin_dir(), &spec.plugin).map_err(|e| other(&e))?;
         (exe, Vec::new())
     };
-    let mut config = secrets::plugin_config(spec, home).map_err(|e| e.to_string())?;
+    let mut config = secrets::plugin_config(spec, home).map_err(BuildError::Secret)?;
     if spec.plugin == LOCAL {
         config = local_config(spec, config);
     }
@@ -289,16 +326,55 @@ fn local_config(
     config
 }
 
-pub async fn tui(paths: &Paths, cfg: &Config, profile: Profile) -> anyhow::Result<()> {
+// built once at startup
+#[allow(clippy::large_enum_variant)]
+pub enum Deck {
+    Local(Profile),
+    Remote {
+        client: Arc<RemoteClient>,
+        name: String,
+        view: ProfileView,
+    },
+}
+
+type Remote = (Arc<RemoteClient>, String, ProfileView);
+
+/// The profile, capture words and plan-link mode of a deck; a served profile brings its own words.
+fn deck_parts(deck: Deck, cfg: &Config) -> (Profile, capture::Words, bool, Option<Remote>) {
+    match deck {
+        Deck::Local(profile) => {
+            let words = capture::Words::new(i18n::current(), &cfg.capture_words);
+            (profile, words, false, None)
+        }
+        Deck::Remote { client, name, view } => {
+            let words = capture::Words::new(i18n::current(), &view.capture_words);
+            (view.to_profile(), words, true, Some((client, name, view)))
+        }
+    }
+}
+
+pub async fn tui(paths: &Paths, cfg: &Config, deck: Deck) -> anyhow::Result<()> {
+    let (profile, words, server_links, remote) = deck_parts(deck, cfg);
     let (mut terminal, _guard) = enter_terminal()?;
     let mut app = App::new(&profile);
+    if server_links {
+        app = app.with_server_links();
+    }
     let home = dirs::home_dir().unwrap_or_default();
     let (event_tx, mut event_rx) = mpsc::channel::<BoxEvent>(64);
     let (tick_tx, mut tick_rx) = mpsc::channel::<usize>(64);
     let mut tasks: Vec<JoinHandle<()>> = Vec::new();
     let mut cmds = Vec::new();
     for (idx, spec) in profile.boxes.iter().enumerate() {
-        match build_host(paths, &home, spec) {
+        let host = match &remote {
+            Some((client, name, view)) => Ok(BoxHost::Remote(RemoteBox::new(
+                client.clone(),
+                name.clone(),
+                &view.boxes[idx],
+            ))),
+            None => build_host(paths, &home, spec).map(BoxHost::Process),
+        };
+        match host {
             Ok(host) => {
                 let (tx, rx) = mpsc::channel(COMMAND_QUEUE);
                 tasks.push(worker::spawn(idx, host, rx, event_tx.clone()));
@@ -313,7 +389,7 @@ pub async fn tui(paths: &Paths, cfg: &Config, profile: Profile) -> anyhow::Resul
     }
     let rt = Runtime {
         profile: &profile,
-        words: capture::Words::new(i18n::current(), &cfg.capture_words),
+        words,
         cmds,
     };
     let result = event_loop(&mut terminal, &mut app, &rt, &mut event_rx, &mut tick_rx).await;
@@ -697,5 +773,58 @@ mod tests {
             app.flash.as_deref(),
             Some("cannot open this kind of link: file:///etc/passwd")
         );
+    }
+
+    #[test]
+    fn deck_parts_of_a_served_profile_use_server_words_and_links() {
+        use crate::api::ProfileView;
+        use crate::config::{CaptureWords, ServerConfig};
+        use crate::remote::RemoteClient;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let token = dir.path().join("token");
+        std::fs::write(&token, "0123456789abcdef0123456789abcdef0123456789").unwrap();
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = ServerConfig {
+            url: "http://127.0.0.1:1".into(),
+            token_file: token.display().to_string(),
+        };
+        let client = Arc::new(RemoteClient::connect(&server, dir.path()).unwrap());
+        let view = ProfileView::from_profile(
+            &profile(),
+            &CaptureWords {
+                tomorrow: vec!["zzmorrow".into()],
+                ..CaptureWords::default()
+            },
+            Vec::new(),
+        );
+        let mut cfg = Config::default();
+        cfg.capture_words.tomorrow = vec!["cfgmorrow".into()];
+        let now = Local::now().fixed_offset();
+        let known = |words: &capture::Words, text: &str| {
+            let none = Default::default();
+            capture::parse(text, now, words, &none, &none)
+                .unwrap()
+                .into_item()
+                .title
+                == "al"
+        };
+
+        let remote = Deck::Remote {
+            client,
+            name: "iş".into(),
+            view,
+        };
+        let (profile_out, words, links, served) = deck_parts(remote, &cfg);
+        assert!(links && served.is_some());
+        assert_eq!(profile_out.name, "iş");
+        assert!(known(&words, "al zzmorrow 10:00"));
+        assert!(!known(&words, "al cfgmorrow 10:00"));
+
+        let (_, words, links, served) = deck_parts(Deck::Local(profile()), &cfg);
+        assert!(!links && served.is_none());
+        assert!(known(&words, "al cfgmorrow 10:00"));
+        assert!(!known(&words, "al zzmorrow 10:00"));
     }
 }

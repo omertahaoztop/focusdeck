@@ -7,7 +7,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::host::PluginHost;
+use crate::host::BoxHost;
 
 // the plan fixes Drop to carry Item by value; commands are rare so the size is irrelevant
 #[allow(clippy::large_enum_variant)]
@@ -46,10 +46,11 @@ pub enum BoxEvent {
 
 pub fn spawn(
     idx: usize,
-    mut host: PluginHost,
+    host: impl Into<BoxHost>,
     mut rx: mpsc::Receiver<BoxCmd>,
     tx: mpsc::Sender<BoxEvent>,
 ) -> JoinHandle<()> {
+    let mut host = host.into();
     tokio::spawn(async move {
         let mut described = false;
         // the first command is answered with this error instead of trying the handshake a second time
@@ -151,7 +152,7 @@ enum Announced {
 
 async fn announce(
     idx: usize,
-    host: &mut PluginHost,
+    host: &mut BoxHost,
     described: &mut bool,
     tx: &mpsc::Sender<BoxEvent>,
 ) -> Announced {

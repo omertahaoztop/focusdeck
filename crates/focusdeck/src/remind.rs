@@ -15,6 +15,7 @@ use crate::local::LOCAL;
 use crate::notify;
 use crate::paths::Paths;
 use crate::profile::Profile;
+use crate::remote::RemoteClient;
 use crate::ui::run::build_host;
 
 const LOOKBACK_HOURS: i64 = 12;
@@ -136,11 +137,58 @@ pub async fn run(
         }
     }
     found.sort_by_key(|(_, r)| r.at);
+    announce(&found, send, now, &mut state, &state_path, &log)
+}
 
-    for (k, r) in &found {
+pub async fn run_remote(
+    paths: &Paths,
+    client: &RemoteClient,
+    profile: &str,
+    send: bool,
+    now: DateTime<FixedOffset>,
+) -> anyhow::Result<usize> {
+    let state_path = paths.state_dir.join("reminded.json");
+    let log = paths.log_file();
+    let _lock = if send {
+        Some(lock(&state_path).with_context(|| write_failed(&state_path))?)
+    } else {
+        None
+    };
+    let mut state = State::load(&state_path);
+    let since = now - Duration::hours(LOOKBACK_HOURS);
+    let response = client
+        .reminders(profile, since)
+        .await
+        .map_err(|e| anyhow::anyhow!(client.explain_naming_server(&e)))?;
+    let mut found: Vec<(String, Reminder)> = Vec::new();
+    for entry in response.reminders {
+        let reminder = Reminder {
+            at: entry.at,
+            item: entry.item,
+        };
+        if let Some((k, _)) = due(&entry.box_id, std::slice::from_ref(&reminder), now, &state)
+            .into_iter()
+            .next()
+        {
+            found.push((k, reminder));
+        }
+    }
+    found.sort_by_key(|(_, r)| r.at);
+    announce(&found, send, now, &mut state, &state_path, &log)
+}
+
+fn announce(
+    found: &[(String, Reminder)],
+    send: bool,
+    now: DateTime<FixedOffset>,
+    state: &mut State,
+    state_path: &Path,
+    log: &Path,
+) -> anyhow::Result<usize> {
+    for (k, r) in found {
         let time = r.at.with_timezone(now.offset()).format("%H:%M").to_string();
         if send {
-            if notify::send_logged(&log, &format!("⏰ {}", r.item.title), &time, true) {
+            if notify::send_logged(log, &format!("⏰ {}", r.item.title), &time, true) {
                 state.0.insert(k.clone(), r.at);
             }
         } else {
@@ -148,10 +196,10 @@ pub async fn run(
         }
     }
     if send {
-        prune(&mut state, now);
+        prune(state, now);
         state
-            .save(&state_path)
-            .with_context(|| write_failed(&state_path))?;
+            .save(state_path)
+            .with_context(|| write_failed(state_path))?;
     }
     Ok(found.len())
 }

@@ -8,14 +8,16 @@ use focusdeck_protocol::{DropParams, Item};
 use tokio::process::Command;
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
+use crate::api::{CaptureRequest, ErrorCode};
 use crate::capture;
-use crate::config::Config;
+use crate::config::{Config, ServerConfig};
 use crate::host::PluginHost;
 use crate::i18n::{self, msg, t, t_args};
 use crate::notify;
 use crate::paths::Paths;
 use crate::profile::Profile;
 use crate::queue::{Queue, Queued, Taken};
+use crate::remote::{self, RemoteClient, RemoteError};
 use crate::ui::run::build_host;
 
 pub async fn run(
@@ -30,16 +32,10 @@ pub async fn run(
         eprintln!("{}", t(msg::CAPTURE_NO_CAPTURE_INTO));
         return Ok(1);
     };
-    let text = match text {
-        Some(text) => text,
-        None => match prompt(&capture_command(cfg)).await {
-            Ok(text) if text.is_empty() => return Ok(0),
-            Ok(text) => text,
-            Err(e) => {
-                notify::send_logged(&log, &t(msg::CAPTURE_FAILED_TITLE), &e, true);
-                return Ok(1);
-            }
-        },
+    let text = match read_text(cfg, text, &log).await {
+        Ok(Some(text)) => text,
+        Ok(None) => return Ok(0),
+        Err(()) => return Ok(1),
     };
     let text = text.trim().to_owned();
 
@@ -58,37 +54,16 @@ pub async fn run(
 
     let mut stop = Stop::new()?;
     let queue = Queue::new(paths.state_dir.join("capture-queue.jsonl"));
-    let entry = Queued {
-        text,
-        at: now,
-        lang: Some(i18n::current().lang().to_owned()),
+    let entry = Queued::new(text, now, Some(i18n::current().lang().to_owned()));
+    let Ok(staged) = stage(&queue, entry, &log) else {
+        return Ok(1);
     };
-    // The note reaches the disk before anything else can go wrong; a kill from here on loses nothing.
-    let pushed = queue.push_entry(&entry);
-    if let Err(e) = &pushed {
-        notify::log_line(&log, &format!("could not write the queue: {e}"));
-    }
-    let mut taken = match queue.take() {
-        Ok(taken) => taken,
-        Err(e) => {
-            notify::log_line(&log, &format!("could not read the queue: {e}"));
-            if pushed.is_ok() {
-                let title = t(msg::CAPTURE_QUEUED_TITLE);
-                notify::send_logged(&log, &title, &e.to_string(), true);
-                return Ok(1);
-            }
-            // With no queue to fall back on, sending now is the only way the note survives.
-            Taken::default()
-        }
-    };
-    let mut items = std::mem::take(&mut taken.items);
-    // Without a queue write the note only exists in memory; the last item is the new one either way.
-    let own = if pushed.is_ok() {
-        items.iter().rposition(|i| *i == entry)
-    } else {
-        items.push(entry);
-        Some(items.len() - 1)
-    };
+    let Staged {
+        taken,
+        items,
+        own,
+        pushed,
+    } = staged;
     let mut progress = Progress {
         items: items.into(),
         popped: 0,
@@ -108,7 +83,7 @@ pub async fn run(
             if let Err(e) = committed {
                 notify::log_line(&log, &format!("could not update the queue: {e}"));
             }
-            if handed_over(pushed.is_ok(), progress.own) {
+            if handed_over(pushed, progress.own) {
                 notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &shown, false);
             } else {
                 let body = if progress.queued_sent > 0 {
@@ -142,13 +117,336 @@ pub async fn run(
             );
         }
         (Outcome::Done(Err(e)), Err(io)) => {
-            report_commit_failure(&log, &format!("{target}: {e}"), &io, pushed.is_ok());
+            report_commit_failure(&log, &format!("{target}: {e}"), &io, pushed);
         }
         (Outcome::Interrupted, Err(io)) => {
-            report_commit_failure(&log, "interrupted", &io, pushed.is_ok());
+            report_commit_failure(&log, "interrupted", &io, pushed);
         }
     }
     Ok(code)
+}
+
+struct Staged {
+    taken: Taken,
+    items: Vec<Queued>,
+    own: Option<usize>,
+    pushed: bool,
+}
+
+// The note reaches the disk before anything else can go wrong; a kill from here on loses nothing.
+fn stage(queue: &Queue, entry: Queued, log: &std::path::Path) -> Result<Staged, ()> {
+    let pushed = queue.push_entry(&entry);
+    if let Err(e) = &pushed {
+        notify::log_line(log, &format!("could not write the queue: {e}"));
+    }
+    let mut taken = match queue.take() {
+        Ok(taken) => taken,
+        Err(e) => {
+            notify::log_line(log, &format!("could not read the queue: {e}"));
+            if pushed.is_ok() {
+                let title = t(msg::CAPTURE_QUEUED_TITLE);
+                notify::send_logged(log, &title, &e.to_string(), true);
+                return Err(());
+            }
+            // With no queue to fall back on, sending now is the only way the note survives.
+            Taken::default()
+        }
+    };
+    let mut items = std::mem::take(&mut taken.items);
+    // Without a queue write the note only exists in memory; the last item is the new one either way.
+    let own = if pushed.is_ok() {
+        items.iter().rposition(|i| *i == entry)
+    } else {
+        items.push(entry);
+        Some(items.len() - 1)
+    };
+    Ok(Staged {
+        taken,
+        items,
+        own,
+        pushed: pushed.is_ok(),
+    })
+}
+
+async fn read_text(
+    cfg: &Config,
+    text: Option<String>,
+    log: &std::path::Path,
+) -> Result<Option<String>, ()> {
+    match text {
+        Some(text) => Ok(Some(text)),
+        None => match prompt(&capture_command(cfg)).await {
+            Ok(text) if text.is_empty() => Ok(None),
+            Ok(text) => Ok(Some(text)),
+            Err(e) => {
+                notify::send_logged(log, &t(msg::CAPTURE_FAILED_TITLE), &e, true);
+                Err(())
+            }
+        },
+    }
+}
+
+/// Client mode: the note is queued first, then the server parses and files it.
+pub async fn run_remote(
+    paths: &Paths,
+    cfg: &Config,
+    server: &ServerConfig,
+    flag: Option<&str>,
+    env_profile: Option<&str>,
+    text: Option<String>,
+    now: DateTime<FixedOffset>,
+) -> anyhow::Result<i32> {
+    let log = paths.log_file();
+    let text = match read_text(cfg, text, &log).await {
+        Ok(Some(text)) => text,
+        Ok(None) => return Ok(0),
+        Err(()) => return Ok(1),
+    };
+    let mut stop = Stop::new()?;
+    let queue = Queue::new(paths.state_dir.join("capture-queue.jsonl"));
+    let entry = Queued::new(
+        text.trim().to_owned(),
+        now,
+        Some(i18n::current().lang().to_owned()),
+    );
+    let note = entry.text.clone();
+    let Ok(staged) = stage(&queue, entry, &log) else {
+        return Ok(1);
+    };
+    let Staged {
+        taken,
+        items,
+        own,
+        pushed,
+    } = staged;
+    let mut progress = RemoteProgress {
+        pending: items.into(),
+        kept: Vec::new(),
+        popped: 0,
+        own,
+        own_result: None,
+        queued_sent: 0,
+        offset: *now.offset(),
+    };
+
+    let home = dirs::home_dir().unwrap_or_default();
+    let connect = async {
+        let (client, name) = remote::connect_profile(server, &home, flag, env_profile, cfg).await?;
+        match client.profile(&name).await {
+            Ok(view) => Ok((client, name, view.capture_into)),
+            Err(e) => {
+                let text = client.explain_naming_server(&e);
+                Err(match e {
+                    RemoteError::Network(_) => anyhow::Error::new(remote::Unreachable(text)),
+                    _ => anyhow::anyhow!(text),
+                })
+            }
+        }
+    };
+    let connected = tokio::select! {
+        result = connect => Some(result),
+        () = stop.wait() => None,
+    };
+    let outcome = match connected {
+        None => RemoteOutcome::Interrupted,
+        Some(Err(e)) => RemoteOutcome::Unreachable {
+            network: e.downcast_ref::<remote::Unreachable>().is_some(),
+            why: e.to_string(),
+        },
+        // the server maps a missing capture_into to INVALID, which would wipe the backlog
+        Some(Ok((_, _, None))) => RemoteOutcome::NoCaptureInto,
+        Some(Ok((client, profile, Some(_)))) => tokio::select! {
+            () = deliver_remote(&client, &profile, &mut progress, &log) => RemoteOutcome::Done,
+            () = stop.wait() => RemoteOutcome::Interrupted,
+        },
+    };
+    let mut unsent = std::mem::take(&mut progress.kept);
+    unsent.extend(progress.pending.drain(..));
+    let committed = queue.commit(taken, &unsent);
+    if let Err(io) = &committed {
+        report_commit_failure(&log, "remote capture", io, pushed);
+    }
+    let failed = committed.is_err();
+    let code = match outcome {
+        RemoteOutcome::Interrupted => {
+            notify::log_line(
+                &log,
+                "interrupted while sending, the unsent notes are queued",
+            );
+            if !failed {
+                let body = t(msg::CAPTURE_INTERRUPTED);
+                notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &body, true);
+            }
+            1
+        }
+        RemoteOutcome::Unreachable { why, network } => {
+            notify::log_line(&log, &why);
+            eprintln!("{why}");
+            if !failed {
+                let body = if network {
+                    note
+                } else {
+                    format!("{note}\n{why}")
+                };
+                notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &body, true);
+            }
+            1
+        }
+        RemoteOutcome::NoCaptureInto => {
+            let why = t(msg::CAPTURE_NO_CAPTURE_INTO);
+            notify::log_line(&log, &why);
+            eprintln!("{why}");
+            if !failed {
+                let body = format!("{note}\n{why}");
+                notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &body, true);
+            }
+            1
+        }
+        RemoteOutcome::Done => {
+            let own_failed = report_remote(&log, &progress, &note, pushed, failed);
+            i32::from(own_failed || failed)
+        }
+    };
+    Ok(code)
+}
+
+enum RemoteOutcome {
+    Done,
+    Interrupted,
+    Unreachable { why: String, network: bool },
+    NoCaptureInto,
+}
+
+enum OwnResult {
+    Added(String),
+    Dropped,
+    Kept(Option<String>),
+}
+
+struct RemoteProgress {
+    pending: VecDeque<Queued>,
+    kept: Vec<Queued>,
+    popped: usize,
+    own: Option<usize>,
+    own_result: Option<OwnResult>,
+    queued_sent: usize,
+    offset: FixedOffset,
+}
+
+fn shown_text(item: &Item, offset: &FixedOffset) -> String {
+    match item.due {
+        Some(due) => format!(
+            "{} · {}",
+            item.title,
+            due.with_timezone(offset).format("%H:%M")
+        ),
+        None => item.title.clone(),
+    }
+}
+
+// Only a server verdict of INVALID ends a note's life in the queue; everything else retries later.
+async fn deliver_remote(
+    client: &RemoteClient,
+    profile: &str,
+    progress: &mut RemoteProgress,
+    log: &std::path::Path,
+) {
+    while let Some(entry) = progress.pending.front() {
+        let is_own = progress.own == Some(progress.popped);
+        let request = CaptureRequest {
+            text: entry.text.clone(),
+            at: entry.at,
+            lang: entry.lang.clone(),
+        };
+        let result = client.capture(profile, &request, Some(&entry.key())).await;
+        let Some(entry) = progress.pending.pop_front() else {
+            return;
+        };
+        progress.popped += 1;
+        match result {
+            Ok(response) => {
+                if is_own {
+                    progress.own_result = Some(OwnResult::Added(shown_text(
+                        &response.item,
+                        &progress.offset,
+                    )));
+                } else {
+                    progress.queued_sent += 1;
+                }
+            }
+            Err(RemoteError::Api {
+                code: ErrorCode::Invalid,
+                message,
+            }) => {
+                notify::log_line(
+                    log,
+                    &format!("the server refused a note ({}): {message}", entry.text),
+                );
+                let body = format!("{}\n{message}", entry.text);
+                notify::send_logged(log, &t(msg::CAPTURE_FAILED_TITLE), &body, true);
+                if is_own {
+                    progress.own_result = Some(OwnResult::Dropped);
+                }
+            }
+            Err(e) => {
+                let text = client.explain_naming_server(&e);
+                notify::log_line(log, &text);
+                let server_gone = matches!(e, RemoteError::Network(_) | RemoteError::Unauthorized);
+                let reason = (!matches!(e, RemoteError::Network(_))).then_some(text);
+                // a stop before the own note's turn still tells the user why
+                if is_own || (server_gone && progress.own.is_some_and(|o| o >= progress.popped)) {
+                    progress.own_result = Some(OwnResult::Kept(reason));
+                }
+                progress.kept.push(entry);
+                if server_gone {
+                    progress.kept.extend(progress.pending.drain(..));
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// True when the own note did not reach the server.
+fn report_remote(
+    log: &std::path::Path,
+    progress: &RemoteProgress,
+    note: &str,
+    pushed: bool,
+    commit_failed: bool,
+) -> bool {
+    match &progress.own_result {
+        Some(OwnResult::Added(shown)) => {
+            let body = if progress.queued_sent > 0 {
+                let flushed = t_args(
+                    msg::CAPTURE_QUEUE_FLUSHED,
+                    &[("count", progress.queued_sent.into())],
+                );
+                format!("{shown}\n{flushed}")
+            } else {
+                shown.clone()
+            };
+            notify::send_logged(log, &t(msg::CAPTURE_ADDED_TITLE), &body, false);
+            false
+        }
+        Some(OwnResult::Dropped) => true,
+        Some(OwnResult::Kept(reason)) => {
+            if !commit_failed {
+                let body = match reason {
+                    Some(reason) => format!("{note}\n{reason}"),
+                    None => note.to_owned(),
+                };
+                notify::send_logged(log, &t(msg::CAPTURE_QUEUED_TITLE), &body, true);
+            }
+            true
+        }
+        None => {
+            if !commit_failed {
+                notify::send_logged(log, &t(msg::CAPTURE_QUEUED_TITLE), note, false);
+            }
+            !handed_over(pushed, progress.own)
+        }
+    }
 }
 
 fn exit_code(outcome: &Outcome, commit_failed: bool) -> i32 {

@@ -31,6 +31,7 @@ pub fn command() -> clap::Command {
             s.about(t(msg::CLI_REMIND_ABOUT))
                 .mut_arg("send", |a| a.help(t(msg::CLI_REMIND_SEND_HELP)))
         })
+        .mut_subcommand("server", |s| s.about(t(msg::CLI_SERVER_ABOUT)))
         .mut_subcommand("plugin", |s| {
             s.about(t(msg::CLI_PLUGIN_ABOUT))
                 .mut_subcommand("install", |s| {
@@ -58,6 +59,7 @@ pub enum Command {
         #[command(subcommand)]
         action: PluginCommand,
     },
+    Server,
 }
 
 #[derive(Debug, Subcommand)]
