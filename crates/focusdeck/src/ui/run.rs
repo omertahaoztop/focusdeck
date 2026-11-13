@@ -326,7 +326,6 @@ fn local_config(
     config
 }
 
-/// Where the board comes from: a profile file on this machine or a profile served by `focusdeck server`.
 // built once at startup
 #[allow(clippy::large_enum_variant)]
 pub enum Deck {
@@ -338,20 +337,27 @@ pub enum Deck {
     },
 }
 
-pub async fn tui(paths: &Paths, cfg: &Config, deck: Deck) -> anyhow::Result<()> {
-    let (profile, words, remote) = match deck {
+type Remote = (Arc<RemoteClient>, String, ProfileView);
+
+/// The profile, capture words and plan-link mode of a deck; a served profile brings its own words.
+fn deck_parts(deck: Deck, cfg: &Config) -> (Profile, capture::Words, bool, Option<Remote>) {
+    match deck {
         Deck::Local(profile) => {
             let words = capture::Words::new(i18n::current(), &cfg.capture_words);
-            (profile, words, None)
+            (profile, words, false, None)
         }
         Deck::Remote { client, name, view } => {
             let words = capture::Words::new(i18n::current(), &view.capture_words);
-            (view.to_profile(), words, Some((client, name, view)))
+            (view.to_profile(), words, true, Some((client, name, view)))
         }
-    };
+    }
+}
+
+pub async fn tui(paths: &Paths, cfg: &Config, deck: Deck) -> anyhow::Result<()> {
+    let (profile, words, server_links, remote) = deck_parts(deck, cfg);
     let (mut terminal, _guard) = enter_terminal()?;
     let mut app = App::new(&profile);
-    if remote.is_some() {
+    if server_links {
         app = app.with_server_links();
     }
     let home = dirs::home_dir().unwrap_or_default();
@@ -767,5 +773,58 @@ mod tests {
             app.flash.as_deref(),
             Some("cannot open this kind of link: file:///etc/passwd")
         );
+    }
+
+    #[test]
+    fn deck_parts_of_a_served_profile_use_server_words_and_links() {
+        use crate::api::ProfileView;
+        use crate::config::{CaptureWords, ServerConfig};
+        use crate::remote::RemoteClient;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let token = dir.path().join("token");
+        std::fs::write(&token, "0123456789abcdef0123456789abcdef0123456789").unwrap();
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = ServerConfig {
+            url: "http://127.0.0.1:1".into(),
+            token_file: token.display().to_string(),
+        };
+        let client = Arc::new(RemoteClient::connect(&server, dir.path()).unwrap());
+        let view = ProfileView::from_profile(
+            &profile(),
+            &CaptureWords {
+                tomorrow: vec!["zzmorrow".into()],
+                ..CaptureWords::default()
+            },
+            Vec::new(),
+        );
+        let mut cfg = Config::default();
+        cfg.capture_words.tomorrow = vec!["cfgmorrow".into()];
+        let now = Local::now().fixed_offset();
+        let known = |words: &capture::Words, text: &str| {
+            let none = Default::default();
+            capture::parse(text, now, words, &none, &none)
+                .unwrap()
+                .into_item()
+                .title
+                == "al"
+        };
+
+        let remote = Deck::Remote {
+            client,
+            name: "iş".into(),
+            view,
+        };
+        let (profile_out, words, links, served) = deck_parts(remote, &cfg);
+        assert!(links && served.is_some());
+        assert_eq!(profile_out.name, "iş");
+        assert!(known(&words, "al zzmorrow 10:00"));
+        assert!(!known(&words, "al cfgmorrow 10:00"));
+
+        let (_, words, links, served) = deck_parts(Deck::Local(profile()), &cfg);
+        assert!(!links && served.is_none());
+        assert!(known(&words, "al cfgmorrow 10:00"));
+        assert!(!known(&words, "al zzmorrow 10:00"));
     }
 }

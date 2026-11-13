@@ -20,12 +20,13 @@ use crate::api::{
     DropResponse, ErrorCode, ItemsResponse, ProfileView, ProfilesResponse, RemindersResponse,
 };
 use crate::config::{Config, ServerConfig};
-use crate::host::HostError;
+use crate::host::{HostError, clip};
 use crate::i18n::{msg, t, t_args};
 use crate::profile::{self, ProfileError};
 use crate::secrets;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// `Network` also carries every server-side fault (5xx, unknown code, non-JSON body) as text.
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +93,20 @@ fn explain_error(address: &str, e: &RemoteError) -> String {
     }
 }
 
+/// Startup errors always name the server; the box red line keeps the plugin text as it came.
+fn startup_text(address: &str, e: &RemoteError) -> String {
+    match e {
+        RemoteError::Api { message, .. } => t_args(
+            msg::REMOTE_FAILED,
+            &[
+                ("address", address.into()),
+                ("error", message.as_str().into()),
+            ],
+        ),
+        other => explain_error(address, other),
+    }
+}
+
 fn error_chain(e: &reqwest::Error) -> String {
     let mut text = e.to_string();
     let mut source = e.source();
@@ -103,11 +118,21 @@ fn error_chain(e: &reqwest::Error) -> String {
     text
 }
 
+fn timeout_text() -> String {
+    t_args(
+        msg::REMOTE_TIMEOUT,
+        &[(
+            "seconds",
+            REQUEST_TIMEOUT.as_secs().to_string().as_str().into(),
+        )],
+    )
+}
+
 fn transport(e: reqwest::Error) -> RemoteError {
     if e.is_timeout() {
-        return RemoteError::Network(t(msg::REMOTE_TIMEOUT));
+        return RemoteError::Network(timeout_text());
     }
-    RemoteError::Network(error_chain(&e.without_url()))
+    RemoteError::Network(clip(&error_chain(&e.without_url())))
 }
 
 fn status_text(status: StatusCode, message: Option<&str>) -> String {
@@ -117,7 +142,7 @@ fn status_text(status: StatusCode, message: Option<&str>) -> String {
             msg::REMOTE_STATUS_MESSAGE,
             &[
                 ("status", status.as_str().into()),
-                ("message", message.into()),
+                ("message", clip(message).as_str().into()),
             ],
         ),
         None => t_args(msg::REMOTE_STATUS, &[("status", status.as_str().into())]),
@@ -144,6 +169,17 @@ fn classify(status: StatusCode, bytes: &[u8]) -> RemoteError {
         (_, Some(w)) => RemoteError::Network(status_text(status, Some(&w.message))),
         _ => RemoteError::Network(status_text(status, None)),
     }
+}
+
+async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, RemoteError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(transport)? {
+        if body.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(RemoteError::Network(t(msg::REMOTE_TOO_LARGE)));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 impl RemoteClient {
@@ -203,14 +239,14 @@ impl RemoteClient {
         }
         let response = request.send().await.map_err(transport)?;
         let status = response.status();
-        let bytes = response.bytes().await.map_err(transport)?;
+        let bytes = read_capped(response).await?;
         if !status.is_success() {
             return Err(classify(status, &bytes));
         }
         serde_json::from_slice(&bytes).map_err(|e| {
             RemoteError::Network(t_args(
                 msg::REMOTE_INVALID_ANSWER,
-                &[("error", e.to_string().as_str().into())],
+                &[("error", clip(&e.to_string()).as_str().into())],
             ))
         })
     }
@@ -294,7 +330,7 @@ pub async fn resolve_profile(
     let listed = client
         .profiles()
         .await
-        .map_err(|e| anyhow::anyhow!(client.explain(&e)))?;
+        .map_err(|e| anyhow::anyhow!(startup_text(client.address(), &e)))?;
     let name = match profile::select_name(cli, env, cfg) {
         Ok(name) => name,
         Err(ProfileError::NoProfileSelected) => listed
@@ -328,13 +364,13 @@ pub async fn open(
     cfg: &Config,
 ) -> anyhow::Result<(Arc<RemoteClient>, String, ProfileView)> {
     let client = RemoteClient::connect(server, home)
-        .map_err(|e| anyhow::anyhow!(explain_error(&public_address(&server.url), &e)))?;
+        .map_err(|e| anyhow::anyhow!(startup_text(&public_address(&server.url), &e)))?;
     let client = Arc::new(client);
     let name = resolve_profile(&client, cli, env, cfg).await?;
     let view = client
         .profile(&name)
         .await
-        .map_err(|e| anyhow::anyhow!(client.explain(&e)))?;
+        .map_err(|e| anyhow::anyhow!(startup_text(client.address(), &e)))?;
     Ok((client, name, view))
 }
 
@@ -468,7 +504,7 @@ mod tests {
     use super::*;
     use crate::api::ErrorCode;
     use focusdeck_protocol::{Item, ListParams, View};
-    use mockito::{Matcher, Server, ServerGuard};
+    use mockito::{Server, ServerGuard};
     use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
 
@@ -660,12 +696,39 @@ mod tests {
     #[tokio::test]
     async fn server_faults_are_network_errors_not_parse_failures() {
         let mut env = env().await;
-        for (status, body) in [
-            (500, "<html>oops</html>".to_string()),
-            (404, error_body("SOMETHING_NEW", "odd")),
-            (503, error_body("NOT_FOUND", "behind a proxy")),
-            (404, error_body("NOT_FOUND", "not found")),
-        ] {
+        let not_found = RemoteError::Api {
+            code: ErrorCode::NotFound,
+            message: "not found".into(),
+        };
+        let cases: Vec<(usize, String, Option<RemoteError>, &str)> = vec![
+            (500, "<html>oops</html>".into(), None, "HTTP 500"),
+            (
+                404,
+                error_body("SOMETHING_NEW", "odd"),
+                None,
+                "HTTP 404: odd",
+            ),
+            (
+                503,
+                error_body("NOT_FOUND", "behind a proxy"),
+                None,
+                "HTTP 503: behind a proxy",
+            ),
+            (
+                404,
+                error_body("NOT_FOUND", "not found"),
+                Some(not_found),
+                "",
+            ),
+            (
+                401,
+                error_body("SOMETHING_NEW", "x"),
+                Some(RemoteError::Unauthorized),
+                "",
+            ),
+            (200, "not json".into(), None, "not valid"),
+        ];
+        for (status, body, expected, needle) in cases {
             let mock = env
                 .server
                 .mock("GET", "/api/v1/profiles")
@@ -675,21 +738,128 @@ mod tests {
                 .await;
             let err = env.client.profiles().await.unwrap_err();
             mock.remove_async().await;
-            match (status, &err) {
-                (404, RemoteError::Api { code, .. }) => assert_eq!(*code, ErrorCode::NotFound),
-                (_, RemoteError::Network(text)) => assert!(text.contains(&status.to_string())),
-                other => panic!("{other:?}"),
+            match expected {
+                Some(expected) => assert_eq!(err, expected, "{status}"),
+                None => match &err {
+                    RemoteError::Network(text) => assert!(text.contains(needle), "{text}"),
+                    other => panic!("{status}: {other:?}"),
+                },
             }
         }
     }
 
     #[tokio::test]
+    async fn redirects_are_not_followed() {
+        let mut env = env().await;
+        let mut elsewhere = Server::new_async().await;
+        let hit = elsewhere
+            .mock("GET", "/api/v1/profiles")
+            .expect(0)
+            .create_async()
+            .await;
+        env.server
+            .mock("GET", "/api/v1/profiles")
+            .with_status(302)
+            .with_header("location", &format!("{}/api/v1/profiles", elsewhere.url()))
+            .create_async()
+            .await;
+        let err = env.client.profiles().await.unwrap_err();
+        assert!(
+            matches!(&err, RemoteError::Network(t) if t.contains("302")),
+            "{err:?}"
+        );
+        hit.assert_async().await;
+    }
+
+    #[test]
+    fn timeout_text_carries_the_configured_seconds() {
+        assert_eq!(timeout_text(), "no answer within 20 s");
+    }
+
+    #[tokio::test]
+    async fn oversized_answers_and_texts_are_cut() {
+        let mut env = env().await;
+        env.server
+            .mock("GET", "/api/v1/profiles")
+            .with_body(vec![b' '; MAX_BODY_BYTES + 1])
+            .create_async()
+            .await;
+        let err = env.client.profiles().await.unwrap_err();
+        assert!(
+            matches!(&err, RemoteError::Network(t) if t.contains("16 MiB")),
+            "{err:?}"
+        );
+
+        env.server.reset();
+        env.server
+            .mock("GET", "/api/v1/profiles")
+            .with_status(500)
+            .with_body(error_body("INTERNAL", &"x".repeat(5000)))
+            .create_async()
+            .await;
+        let RemoteError::Network(text) = env.client.profiles().await.unwrap_err() else {
+            panic!("expected a network error");
+        };
+        assert!(text.chars().count() < 300, "{}", text.len());
+    }
+
+    #[tokio::test]
+    async fn startup_api_errors_name_the_address_but_the_box_line_stays_verbatim() {
+        let mut env = env().await;
+        env.server
+            .mock("GET", "/api/v1/profiles")
+            .with_status(404)
+            .with_body(error_body("NOT_FOUND", "not found"))
+            .create_async()
+            .await;
+        let err = resolve_profile(&env.client, None, None, &Config::default())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&env.server.url()) && err.contains("not found"),
+            "{err}"
+        );
+        let api = RemoteError::Api {
+            code: ErrorCode::Plugin,
+            message: "vikunja said no".into(),
+        };
+        assert_eq!(env.client.explain(&api), "vikunja said no");
+    }
+
+    #[test]
+    fn plain_http_to_a_remote_host_is_refused_before_any_request() {
+        let home = tempfile::tempdir().unwrap();
+        let token = home.path().join("token");
+        std::fs::write(&token, TOKEN).unwrap();
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = |url: &str| ServerConfig {
+            url: url.into(),
+            token_file: token.display().to_string(),
+        };
+        let url = "http://deck.example.com";
+        let err = RemoteClient::connect(&config(url), home.path()).unwrap_err();
+        let expected = t_args(msg::ERROR_SERVER_URL_INSECURE, &[("url", url.into())]);
+        assert_eq!(err, RemoteError::Network(expected));
+        assert!(RemoteClient::connect(&config("http://127.0.0.1:8740"), home.path()).is_ok());
+    }
+
+    #[tokio::test]
     async fn drops_carry_a_fresh_idempotency_key() {
         let mut env = env().await;
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let record = Arc::clone(&seen);
         let mock = env
             .server
             .mock("POST", "/api/v1/profiles/p/boxes/notes/drops")
-            .match_header("idempotency-key", Matcher::Regex("^[0-9a-f]+$".into()))
+            .match_request(move |req| {
+                let key = req.header("idempotency-key");
+                record
+                    .lock()
+                    .unwrap()
+                    .extend(key.iter().map(|v| v.to_str().unwrap().to_owned()));
+                !key.is_empty()
+            })
             .with_body(json!({"item": item_json("9")}).to_string())
             .expect(2)
             .create_async()
@@ -703,6 +873,13 @@ mod tests {
         assert_eq!(item.id, "9");
         bx.call::<_, Item>("drop", &params).await.unwrap();
         mock.assert_async().await;
+        let keys = seen.lock().unwrap().clone();
+        assert!(keys.len() >= 2, "{keys:?}");
+        assert!(
+            keys.iter()
+                .all(|k| k.chars().all(|c| c.is_ascii_hexdigit()))
+        );
+        assert_ne!(keys[0], keys[keys.len() - 1], "{keys:?}");
     }
 
     #[tokio::test]
@@ -805,18 +982,5 @@ mod tests {
             .unwrap();
         let text = format!("{err:#}");
         assert!(text.contains(&dead) && !text.contains(TOKEN), "{text}");
-    }
-
-    #[test]
-    fn plain_http_to_a_remote_host_is_refused_before_any_request() {
-        let home = tempfile::tempdir().unwrap();
-        let cfg = ServerConfig {
-            url: "http://deck.example.com".into(),
-            token_file: "~/t".into(),
-        };
-        assert!(matches!(
-            RemoteClient::connect(&cfg, home.path()),
-            Err(RemoteError::Network(_))
-        ));
     }
 }

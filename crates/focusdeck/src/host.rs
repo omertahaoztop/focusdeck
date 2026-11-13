@@ -236,7 +236,6 @@ impl PluginHost {
     }
 }
 
-/// What a worker drives: a plugin process on this machine or a box on a focusdeck server.
 // one value per box for the life of the run, so the size gap is irrelevant
 #[allow(clippy::large_enum_variant)]
 pub enum BoxHost {
@@ -324,7 +323,7 @@ async fn exchange(
         .map_err(|_| HostError::Timeout)?
 }
 
-fn clip(line: &str) -> String {
+pub(crate) fn clip(line: &str) -> String {
     line.chars().take(BAD_LINE_LIMIT).collect()
 }
 

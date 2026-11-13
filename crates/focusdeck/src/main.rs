@@ -118,15 +118,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     .await?;
                     Deck::Remote { client, name, view }
                 }
-                None => {
-                    let name = profile::resolve_name(
-                        &paths,
-                        cli.profile.as_deref(),
-                        env_profile.as_deref(),
-                        &config,
-                    )?;
-                    Deck::Local(profile::load(&paths.profile_path(&name))?)
-                }
+                None => Deck::Local(local_profile(
+                    &paths,
+                    cli.profile.as_deref(),
+                    env_profile.as_deref(),
+                    &config,
+                )?),
             };
             focusdeck::ui::run::tui(&paths, &config, deck).await?;
             Ok(ExitCode::SUCCESS)
@@ -138,7 +135,16 @@ fn load_profile(flag: Option<&str>) -> anyhow::Result<(Paths, Config, Profile)> 
     let paths = Paths::from_env().map_err(anyhow::Error::msg)?;
     let config = Config::load(&paths)?;
     let env_profile = std::env::var("FOCUSDECK_PROFILE").ok();
-    let name = profile::resolve_name(&paths, flag, env_profile.as_deref(), &config)?;
-    let profile = profile::load(&paths.profile_path(&name))?;
+    let profile = local_profile(&paths, flag, env_profile.as_deref(), &config)?;
     Ok((paths, config, profile))
+}
+
+fn local_profile(
+    paths: &Paths,
+    flag: Option<&str>,
+    env: Option<&str>,
+    config: &Config,
+) -> anyhow::Result<Profile> {
+    let name = profile::resolve_name(paths, flag, env, config)?;
+    Ok(profile::load(&paths.profile_path(&name))?)
 }
