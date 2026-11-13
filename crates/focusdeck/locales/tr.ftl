@@ -116,6 +116,8 @@ error-plugin-not-installed = { $plugin } kurulu değil, focusdeck plugin install
 error-secret-missing = { $path } bulunamadı
 error-secret-exposed = { $path } dosyasını başkaları okuyabiliyor, chmod 600 yap
 error-secret-unreadable = { $path } denetlenemedi: { $error }
+error-token-too-short = { $path } dosyasındaki token 32 karakterden kısa
+error-server-url-insecure = sunucu adresi https olmalı (düz http yalnız localhost için): { $url }
 error-no-base-dir = { $var } ayarlı değil ve ev dizini bulunamadı
 
 config-read-failed = { $path } okunamadı

@@ -125,6 +125,13 @@ pub async fn fetch(url: &str) -> anyhow::Result<Vec<u8>> {
     bail!(t_args(msg::INSTALL_UNSUPPORTED_URL, &[("url", url.into())]))
 }
 
+pub fn https_or_loopback(url: &str) -> bool {
+    match reqwest::Url::parse(url) {
+        Ok(u) => u.scheme() == "https" || (u.scheme() == "http" && is_loopback(&u)),
+        Err(_) => false,
+    }
+}
+
 fn is_loopback(url: &reqwest::Url) -> bool {
     matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
 }

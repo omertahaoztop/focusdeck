@@ -116,6 +116,8 @@ error-plugin-not-installed = { $plugin } is not installed, run focusdeck plugin 
 error-secret-missing = { $path } not found
 error-secret-exposed = { $path } is readable by others, run chmod 600
 error-secret-unreadable = could not check { $path }: { $error }
+error-token-too-short = { $path } holds a token shorter than 32 characters
+error-server-url-insecure = server url must be https (plain http only for localhost): { $url }
 error-no-base-dir = { $var } is not set and no home directory was found
 
 config-read-failed = could not read { $path }
