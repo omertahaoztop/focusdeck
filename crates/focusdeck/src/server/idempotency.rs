@@ -39,10 +39,16 @@ struct Entry {
     at: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct FileFormat {
     version: u32,
     keys: BTreeMap<String, Entry>,
+}
+
+#[derive(Serialize)]
+struct FileRef<'a> {
+    version: u32,
+    keys: &'a BTreeMap<String, Entry>,
 }
 
 pub struct IdempotencyStore {
@@ -63,11 +69,8 @@ fn invalid(message: String) -> io::Error {
 }
 
 fn persist(path: &std::path::Path, keys: &BTreeMap<String, Entry>) -> io::Result<()> {
-    let file = FileFormat {
-        version: 1,
-        keys: keys.clone(),
-    };
-    let bytes = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
+    let bytes =
+        serde_json::to_vec_pretty(&FileRef { version: 1, keys }).map_err(io::Error::other)?;
     write_atomic(path, &bytes)
 }
 
@@ -145,12 +148,11 @@ impl IdempotencyStore {
             });
         }
         let cutoff = now - Duration::days(RETENTION_DAYS);
-        let mut next = keys.clone();
-        next.retain(|_, entry| {
+        keys.retain(|_, entry| {
             entry.state == State::InProgress
                 || DateTime::parse_from_rfc3339(&entry.at).is_ok_and(|at| at >= cutoff)
         });
-        next.insert(
+        keys.insert(
             key.to_owned(),
             Entry {
                 body,
@@ -159,34 +161,30 @@ impl IdempotencyStore {
                 at: now.to_rfc3339(),
             },
         );
-        persist(&self.path, &next)?;
-        *keys = next;
+        if let Err(e) = persist(&self.path, &keys) {
+            keys.remove(key);
+            return Err(e);
+        }
         Ok(Claim::New)
     }
 
+    /// Memory keeps the answer even when the write fails, so a retry replays it instead of waiting.
     pub fn complete(&self, key: &str, response: &Value) -> io::Result<()> {
         let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
-        let mut next = keys.clone();
-        let entry = next.get_mut(key).ok_or_else(|| {
+        let entry = keys.get_mut(key).ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, t(msg::SERVER_KEY_NOT_CLAIMED))
         })?;
         entry.state = State::Done;
         entry.response = Some(response.clone());
-        persist(&self.path, &next)?;
-        *keys = next;
-        Ok(())
+        persist(&self.path, &keys)
     }
 
     pub fn release(&self, key: &str) -> io::Result<()> {
         let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
-        if !keys.contains_key(key) {
+        if keys.remove(key).is_none() {
             return Ok(());
         }
-        let mut next = keys.clone();
-        next.remove(key);
-        persist(&self.path, &next)?;
-        *keys = next;
-        Ok(())
+        persist(&self.path, &keys)
     }
 }
 
@@ -432,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_disk_write_leaves_memory_unchanged() {
+    fn failed_disk_write_rolls_back_a_claim_but_keeps_an_answer() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("state");
         std::fs::create_dir(&sub).unwrap();
@@ -442,10 +440,21 @@ mod tests {
         assert!(store.claim("k", body, now()).is_err());
         std::fs::create_dir(&sub).unwrap();
         assert_eq!(store.claim("k", body, now()).unwrap(), Claim::New);
+        assert_eq!(store.claim("r", body, now()).unwrap(), Claim::New);
         std::fs::remove_dir_all(&sub).unwrap();
         assert!(store.complete("k", &json!(1)).is_err());
-        assert!(store.release("k").is_err());
+        assert!(store.release("r").is_err());
         std::fs::create_dir(&sub).unwrap();
-        assert_eq!(store.claim("k", body, now()).unwrap(), Claim::InProgress);
+        assert_eq!(
+            store.claim("k", body, now()).unwrap(),
+            Claim::Replay(json!(1))
+        );
+        assert_eq!(store.claim("r", body, now()).unwrap(), Claim::New);
+        let (reopened, _) = IdempotencyStore::open(sub.join("idempotency.json"), now()).unwrap();
+        assert_eq!(
+            reopened.claim("k", body, now()).unwrap(),
+            Claim::Replay(json!(1)),
+            "the next successful write carries the answer to disk"
+        );
     }
 }
