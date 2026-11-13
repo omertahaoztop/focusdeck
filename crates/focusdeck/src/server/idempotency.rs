@@ -1,0 +1,343 @@
+//! Persistent `Idempotency-Key` claims so a retried request never creates a second note.
+
+use std::collections::BTreeMap;
+use std::io;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use chrono::{DateTime, Duration, FixedOffset};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use crate::fsio::write_atomic;
+
+const RETENTION_DAYS: i64 = 90;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Claim {
+    New,
+    Replay(Value),
+    InProgress,
+    Reused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum State {
+    InProgress,
+    Done,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Entry {
+    body: String,
+    state: State,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    response: Option<Value>,
+    at: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct FileFormat {
+    version: u32,
+    keys: BTreeMap<String, Entry>,
+}
+
+pub struct IdempotencyStore {
+    path: PathBuf,
+    keys: Mutex<BTreeMap<String, Entry>>,
+}
+
+fn hex(bytes: &[u8; 32]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::with_capacity(64), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
+}
+
+fn invalid(message: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+fn persist(path: &std::path::Path, keys: &BTreeMap<String, Entry>) -> io::Result<()> {
+    let file = FileFormat {
+        version: 1,
+        keys: keys.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
+    write_atomic(path, &bytes)
+}
+
+impl IdempotencyStore {
+    pub fn open(path: PathBuf, now: DateTime<FixedOffset>) -> io::Result<(Self, usize)> {
+        let mut keys = match std::fs::read(&path) {
+            Ok(raw) => {
+                let file: FileFormat = serde_json::from_slice(&raw)
+                    .map_err(|e| invalid(format!("{}: {e}", path.display())))?;
+                if file.version != 1 {
+                    return Err(invalid(format!(
+                        "{}: unsupported version {}",
+                        path.display(),
+                        file.version
+                    )));
+                }
+                file.keys
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => return Err(e),
+        };
+        let cutoff = now - Duration::days(RETENTION_DAYS);
+        let before = keys.len();
+        let mut dropped_in_progress = 0;
+        let mut expired = Vec::new();
+        for (key, entry) in &keys {
+            let at = DateTime::parse_from_rfc3339(&entry.at)
+                .map_err(|e| invalid(format!("{}: entry time: {e}", path.display())))?;
+            if entry.state == State::InProgress {
+                dropped_in_progress += 1;
+                expired.push(key.clone());
+            } else if at < cutoff {
+                expired.push(key.clone());
+            }
+        }
+        for key in expired {
+            keys.remove(&key);
+        }
+        if keys.len() != before {
+            persist(&path, &keys)?;
+        }
+        Ok((
+            Self {
+                path,
+                keys: Mutex::new(keys),
+            },
+            dropped_in_progress,
+        ))
+    }
+
+    pub fn claim(
+        &self,
+        key: &str,
+        body_sha256: [u8; 32],
+        now: DateTime<FixedOffset>,
+    ) -> io::Result<Claim> {
+        let body = hex(&body_sha256);
+        let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = keys.get(key) {
+            return Ok(if entry.body != body {
+                Claim::Reused
+            } else if entry.state == State::InProgress {
+                Claim::InProgress
+            } else {
+                Claim::Replay(entry.response.clone().unwrap_or(Value::Null))
+            });
+        }
+        let mut next = keys.clone();
+        next.insert(
+            key.to_owned(),
+            Entry {
+                body,
+                state: State::InProgress,
+                response: None,
+                at: now.to_rfc3339(),
+            },
+        );
+        persist(&self.path, &next)?;
+        *keys = next;
+        Ok(Claim::New)
+    }
+
+    pub fn complete(&self, key: &str, response: &Value) -> io::Result<()> {
+        let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        let mut next = keys.clone();
+        let entry = next.get_mut(key).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "idempotency key not claimed")
+        })?;
+        entry.state = State::Done;
+        entry.response = Some(response.clone());
+        persist(&self.path, &next)?;
+        *keys = next;
+        Ok(())
+    }
+
+    pub fn release(&self, key: &str) -> io::Result<()> {
+        let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        if !keys.contains_key(key) {
+            return Ok(());
+        }
+        let mut next = keys.clone();
+        next.remove(key);
+        persist(&self.path, &next)?;
+        *keys = next;
+        Ok(())
+    }
+}
+
+pub fn body_hash(body: &[u8]) -> [u8; 32] {
+    Sha256::digest(body).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn now() -> DateTime<FixedOffset> {
+        DateTime::parse_from_rfc3339("2026-11-13T10:00:00+03:00").unwrap()
+    }
+
+    fn open(dir: &tempfile::TempDir) -> (IdempotencyStore, usize) {
+        IdempotencyStore::open(dir.path().join("idempotency.json"), now()).unwrap()
+    }
+
+    #[test]
+    fn same_key_same_body_replays() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        let body = body_hash(b"a");
+        assert_eq!(store.claim("k", body, now()).unwrap(), Claim::New);
+        store.complete("k", &json!({"ok": 1})).unwrap();
+        assert_eq!(
+            store.claim("k", body, now()).unwrap(),
+            Claim::Replay(json!({"ok": 1}))
+        );
+        let (reopened, dropped) = open(&dir);
+        assert_eq!(dropped, 0);
+        assert_eq!(
+            reopened.claim("k", body, now()).unwrap(),
+            Claim::Replay(json!({"ok": 1}))
+        );
+    }
+
+    #[test]
+    fn same_key_other_body_is_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        assert_eq!(
+            store.claim("k", body_hash(b"a"), now()).unwrap(),
+            Claim::New
+        );
+        assert_eq!(
+            store.claim("k", body_hash(b"b"), now()).unwrap(),
+            Claim::Reused
+        );
+        store.complete("k", &json!({})).unwrap();
+        assert_eq!(
+            store.claim("k", body_hash(b"b"), now()).unwrap(),
+            Claim::Reused
+        );
+    }
+
+    #[test]
+    fn claim_while_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        let body = body_hash(b"a");
+        assert_eq!(store.claim("k", body, now()).unwrap(), Claim::New);
+        assert_eq!(store.claim("k", body, now()).unwrap(), Claim::InProgress);
+    }
+
+    #[test]
+    fn release_allows_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        let body = body_hash(b"a");
+        assert_eq!(store.claim("k", body, now()).unwrap(), Claim::New);
+        store.release("k").unwrap();
+        assert_eq!(store.claim("k", body, now()).unwrap(), Claim::New);
+        let (reopened, dropped) = open(&dir);
+        assert_eq!(dropped, 1);
+        assert_eq!(reopened.claim("k", body, now()).unwrap(), Claim::New);
+    }
+
+    #[test]
+    fn reopen_drops_in_progress_and_counts_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        let body = body_hash(b"a");
+        store.claim("pending", body, now()).unwrap();
+        store.claim("finished", body, now()).unwrap();
+        store.complete("finished", &json!({"n": 2})).unwrap();
+        drop(store);
+        let (reopened, dropped) = open(&dir);
+        assert_eq!(dropped, 1);
+        assert_eq!(reopened.claim("pending", body, now()).unwrap(), Claim::New);
+        assert_eq!(
+            reopened.claim("finished", body, now()).unwrap(),
+            Claim::Replay(json!({"n": 2}))
+        );
+        let (_, again) = open(&dir);
+        assert_eq!(again, 1, "the re-claimed key is in progress again");
+    }
+
+    #[test]
+    fn entries_older_than_90_days_are_pruned_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        let body = body_hash(b"a");
+        let old = now() - Duration::days(91);
+        let fresh = now() - Duration::days(89);
+        store.claim("old", body, old).unwrap();
+        store.complete("old", &json!(1)).unwrap();
+        store.claim("fresh", body, fresh).unwrap();
+        store.complete("fresh", &json!(2)).unwrap();
+        drop(store);
+        let (reopened, dropped) = open(&dir);
+        assert_eq!(dropped, 0);
+        assert_eq!(reopened.claim("old", body, now()).unwrap(), Claim::New);
+        assert_eq!(
+            reopened.claim("fresh", body, now()).unwrap(),
+            Claim::Replay(json!(2))
+        );
+    }
+
+    #[test]
+    fn eight_threads_claiming_one_key_get_one_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        let store = Arc::new(store);
+        let body = body_hash(b"a");
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let store = Arc::clone(&store);
+                std::thread::spawn(move || store.claim("k", body, now()).unwrap())
+            })
+            .collect();
+        let results: Vec<Claim> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(results.iter().filter(|c| **c == Claim::New).count(), 1);
+        assert_eq!(
+            results.iter().filter(|c| **c == Claim::InProgress).count(),
+            7
+        );
+    }
+
+    #[test]
+    fn corrupt_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("idempotency.json");
+        std::fs::write(&path, b"{not json").unwrap();
+        assert!(IdempotencyStore::open(path.clone(), now()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"{not json");
+    }
+
+    #[test]
+    fn failed_disk_write_leaves_memory_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("state");
+        std::fs::create_dir(&sub).unwrap();
+        let (store, _) = IdempotencyStore::open(sub.join("idempotency.json"), now()).unwrap();
+        let body = body_hash(b"a");
+        std::fs::remove_dir_all(&sub).unwrap();
+        assert!(store.claim("k", body, now()).is_err());
+        std::fs::create_dir(&sub).unwrap();
+        assert_eq!(store.claim("k", body, now()).unwrap(), Claim::New);
+        std::fs::remove_dir_all(&sub).unwrap();
+        assert!(store.complete("k", &json!(1)).is_err());
+        assert!(store.release("k").is_err());
+        std::fs::create_dir(&sub).unwrap();
+        assert_eq!(store.claim("k", body, now()).unwrap(), Claim::InProgress);
+    }
+}

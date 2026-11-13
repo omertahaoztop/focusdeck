@@ -17,5 +17,6 @@ pub mod profile;
 pub mod queue;
 pub mod remind;
 pub mod secrets;
+pub mod server;
 pub mod ui;
 pub mod worker;
