@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Bytes, to_bytes};
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{FromRequestParts, Path, Query, Request, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::Response;
@@ -47,8 +48,23 @@ pub fn router(board: Arc<Board>, keys: Arc<IdempotencyStore>, token: String) -> 
         .route("/api/v1/profiles/{p}/captures", post(captures))
         .route("/api/v1/profiles/{p}/reminders", get(reminders))
         .fallback(unknown_route)
+        .method_not_allowed_fallback(unknown_route)
         .layer(middleware::from_fn_with_state(app.clone(), auth))
         .with_state(app)
+}
+
+/// `Path` whose rejection is the JSON error shape.
+struct Params<T>(T);
+
+impl<S: Send + Sync, T: DeserializeOwned + Send> FromRequestParts<S> for Params<T> {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Response> {
+        Path::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Path(v)| Params(v))
+            .map_err(|_| api_error(ErrorCode::NotFound, t(msg::BOARD_NOT_FOUND)))
+    }
 }
 
 fn now() -> DateTime<FixedOffset> {
@@ -158,17 +174,17 @@ async fn profiles(State(app): State<App>) -> Response {
     respond(Ok(app.board.profiles().await))
 }
 
-async fn profile(State(app): State<App>, Path(p): Path<String>) -> Response {
+async fn profile(State(app): State<App>, Params(p): Params<String>) -> Response {
     respond(app.board.profile_view(&p).await)
 }
 
-async fn items(State(app): State<App>, Path((p, b)): Path<(String, String)>) -> Response {
+async fn items(State(app): State<App>, Params((p, b)): Params<(String, String)>) -> Response {
     respond(app.board.items(&p, &b, now()).await)
 }
 
 async fn actions(
     State(app): State<App>,
-    Path((p, b)): Path<(String, String)>,
+    Params((p, b)): Params<(String, String)>,
     req: Request,
 ) -> Response {
     match read_json::<ActionRequest>(req).await {
@@ -179,7 +195,7 @@ async fn actions(
 
 async fn drops(
     State(app): State<App>,
-    Path((p, b)): Path<(String, String)>,
+    Params((p, b)): Params<(String, String)>,
     req: Request,
 ) -> Response {
     let headers = req.headers().clone();
@@ -197,7 +213,7 @@ async fn drops(
     }
 }
 
-async fn captures(State(app): State<App>, Path(p): Path<String>, req: Request) -> Response {
+async fn captures(State(app): State<App>, Params(p): Params<String>, req: Request) -> Response {
     let headers = req.headers().clone();
     match read_json::<CaptureRequest>(req).await {
         Ok((bytes, body)) => idempotent(&app, &headers, &bytes, app.board.capture(&p, body)).await,
@@ -207,7 +223,7 @@ async fn captures(State(app): State<App>, Path(p): Path<String>, req: Request) -
 
 async fn reminders(
     State(app): State<App>,
-    Path(p): Path<String>,
+    Params(p): Params<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     let since = query
@@ -269,6 +285,22 @@ impl Drop for ReleaseGuard {
     }
 }
 
+/// The guard is built where the claim is made, so it exists even if the awaiting handler was dropped.
+fn claim_owned(
+    keys: &Arc<IdempotencyStore>,
+    key: &str,
+    hash: [u8; 32],
+    at: DateTime<FixedOffset>,
+) -> io::Result<(Claim, Option<ReleaseGuard>)> {
+    let claim = keys.claim(key, hash, at)?;
+    let guard = (claim == Claim::New).then(|| ReleaseGuard {
+        keys: Arc::clone(keys),
+        key: key.to_owned(),
+        armed: true,
+    });
+    Ok((claim, guard))
+}
+
 fn key_header(headers: &HeaderMap) -> Result<Option<String>, Rejection> {
     let Some(raw) = headers.get("idempotency-key") else {
         return Ok(None);
@@ -289,23 +321,21 @@ where
         Ok(None) => return respond(run.await),
         Err(rejection) => return *rejection,
     };
-    let claim = {
+    let claimed = {
         let (keys, key, hash) = (Arc::clone(&app.keys), key.clone(), body_hash(body));
-        blocking(move || keys.claim(&key, hash, now())).await
+        blocking(move || claim_owned(&keys, &key, hash, now())).await
     };
-    match claim {
-        Ok(Claim::New) => {}
-        Ok(Claim::Replay(stored)) => return json_response(StatusCode::OK, &stored),
-        Ok(Claim::InProgress) => {
+    let mut guard = match claimed {
+        Ok((Claim::New, Some(guard))) => guard,
+        Ok((Claim::Replay(stored), _)) => return json_response(StatusCode::OK, &stored),
+        Ok((Claim::InProgress, _)) => {
             return api_error(ErrorCode::InProgress, t(msg::SERVER_IN_PROGRESS));
         }
-        Ok(Claim::Reused) => return api_error(ErrorCode::KeyReused, t(msg::SERVER_KEY_REUSED)),
+        Ok((Claim::Reused, _)) => {
+            return api_error(ErrorCode::KeyReused, t(msg::SERVER_KEY_REUSED));
+        }
+        Ok((Claim::New, None)) => unreachable!("a new claim always comes with its guard"),
         Err(e) => return internal(&e),
-    }
-    let mut guard = ReleaseGuard {
-        keys: Arc::clone(&app.keys),
-        key: key.clone(),
-        armed: true,
     };
     let done = match run.await {
         Ok(done) => done,
@@ -316,10 +346,7 @@ where
     };
     // the plugin did the work: from here the key must stay claimed
     guard.armed = false;
-    let stored: Value = match serde_json::to_value(&done) {
-        Ok(stored) => stored,
-        Err(e) => return internal(&io::Error::other(e)),
-    };
+    let stored: Value = serde_json::to_value(&done).expect("API bodies serialize");
     let (keys, saved) = (Arc::clone(&app.keys), stored.clone());
     log_store_error(blocking(move || keys.complete(&key, &saved)).await);
     json_response(StatusCode::OK, &stored)
@@ -366,5 +393,19 @@ mod tests {
         drop(guard(&keys, false));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert_eq!(keys.claim("k", hash, now()).unwrap(), Claim::InProgress);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_claim_result_frees_the_key() {
+        let (_dir, keys) = store();
+        let hash = body_hash(b"a");
+        drop(claim_owned(&keys, "k", hash, now()).unwrap());
+        for _ in 0..100 {
+            if keys.claim("k", hash, now()).unwrap() == Claim::New {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the claim was never released");
     }
 }

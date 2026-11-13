@@ -31,18 +31,49 @@ refresh = "1s"
 config = { key_file = "~/secret.key", email = "me@example.com" }
 "#;
 
+struct Proc(Child);
+
+impl Drop for Proc {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn stderr_log(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("stderr.log")).unwrap_or_default()
+}
+
+fn spawn_server(dir: &Path, stdout: Stdio) -> Proc {
+    let stderr = std::fs::File::create(dir.join("stderr.log")).unwrap();
+    Proc(
+        command(dir)
+            .arg("server")
+            .stdout(stdout)
+            .stderr(stderr)
+            .spawn()
+            .unwrap(),
+    )
+}
+
+/// Runs the server expecting it to exit by itself; a server that keeps running fails the test.
+fn exit_with_error(dir: &Path) -> String {
+    let mut proc = spawn_server(dir, Stdio::null());
+    for _ in 0..600 {
+        if let Some(status) = proc.0.try_wait().unwrap() {
+            assert!(!status.success());
+            return stderr_log(dir);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("the server kept running");
+}
+
 struct Server {
-    child: Child,
+    _proc: Proc,
     base: String,
     client: reqwest::Client,
     _dir: tempfile::TempDir,
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 fn command(dir: &Path) -> Command {
@@ -80,13 +111,8 @@ impl Server {
     fn start() -> Server {
         let dir = tempfile::tempdir().unwrap();
         prepare(dir.path(), SERVE);
-        let mut child = command(dir.path())
-            .arg("server")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let stdout = child.stdout.take().unwrap();
+        let mut proc = spawn_server(dir.path(), Stdio::piped());
+        let stdout = proc.0.stdout.take().unwrap();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -95,13 +121,13 @@ impl Server {
         });
         let line = rx
             .recv_timeout(Duration::from_secs(30))
-            .expect("the server printed no listening line");
+            .unwrap_or_else(|_| panic!("no listening line, stderr: {}", stderr_log(dir.path())));
         let addr = line
             .split_whitespace()
             .find(|word| word.starts_with("127.0.0.1:"))
             .unwrap_or_else(|| panic!("no address in {line:?}"));
         Server {
-            child,
+            _proc: proc,
             base: format!("http://{addr}/api/v1"),
             client: reqwest::Client::new(),
             _dir: dir,
@@ -278,9 +304,7 @@ async fn malformed_and_oversized_bodies_use_the_error_shape() {
 fn server_without_serve_section_exits_with_error() {
     let dir = tempfile::tempdir().unwrap();
     prepare(dir.path(), "");
-    let out = command(dir.path()).arg("server").output().unwrap();
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("[serve]"));
+    assert!(exit_with_error(dir.path()).contains("[serve]"));
 }
 
 #[test]
@@ -288,7 +312,58 @@ fn corrupt_idempotency_file_stops_the_server() {
     let dir = tempfile::tempdir().unwrap();
     prepare(dir.path(), SERVE);
     std::fs::write(dir.path().join("state/idempotency.json"), "{broken").unwrap();
-    let out = command(dir.path()).arg("server").output().unwrap();
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("idempotency.json"));
+    assert!(exit_with_error(dir.path()).contains("idempotency.json"));
+}
+
+#[tokio::test]
+async fn failed_request_releases_its_key_for_a_retry() {
+    let server = Server::start();
+    for _ in 0..2 {
+        let req = server
+            .post("/profiles/yok/captures")
+            .header("Idempotency-Key", "k-4")
+            .json(&json!({"text": "x", "at": "2026-11-13T10:00:00+03:00", "lang": "en"}));
+        let (status, body) = send(req).await;
+        assert_eq!(
+            (status, &body["error"]["code"]),
+            (404, &json!("NOT_FOUND")),
+            "{body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn wrong_method_and_bad_path_use_the_error_shape() {
+    let server = Server::start();
+    let (status, body) = send(server.post("/profiles")).await;
+    assert_eq!((status, &body["error"]["code"]), (404, &json!("NOT_FOUND")));
+    let (status, body) = send(server.get("/profiles/%FF")).await;
+    assert_eq!((status, &body["error"]["code"]), (404, &json!("NOT_FOUND")));
+}
+
+#[tokio::test]
+async fn unknown_route_without_token_is_401() {
+    let server = Server::start();
+    let url = server.base.replace("/api/v1", "/nowhere");
+    let (status, body) = send(server.client.get(url)).await;
+    assert_eq!(
+        (status, &body["error"]["code"]),
+        (401, &json!("UNAUTHORIZED"))
+    );
+}
+
+#[test]
+fn second_server_on_a_busy_port_leaves_the_key_store_alone() {
+    let first = Server::start();
+    let addr = first
+        .base
+        .trim_start_matches("http://")
+        .trim_end_matches("/api/v1");
+    let dir = tempfile::tempdir().unwrap();
+    prepare(dir.path(), &SERVE.replace("127.0.0.1:0", addr));
+    let store = dir.path().join("state/idempotency.json");
+    let pending = r#"{"version":1,"keys":{"k":{"body":"00","state":"in_progress","at":"2026-11-13T10:00:00+03:00"}}}"#;
+    std::fs::write(&store, pending).unwrap();
+    exit_with_error(dir.path());
+    assert_eq!(std::fs::read_to_string(&store).unwrap(), pending);
 }

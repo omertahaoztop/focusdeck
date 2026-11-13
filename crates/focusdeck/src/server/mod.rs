@@ -21,15 +21,15 @@ pub async fn run(paths: &Paths, cfg: &Config) -> anyhow::Result<()> {
     let home = dirs::home_dir().unwrap_or_default();
     let token = secrets::read_token(&serve.token_file, &home)?;
     let board = Board::load(paths, cfg, &home)?;
+    let listener = tokio::net::TcpListener::bind(serve.listen)
+        .await
+        .with_context(|| serve.listen.to_string())?;
     std::fs::create_dir_all(&paths.state_dir)
         .with_context(|| paths.state_dir.display().to_string())?;
     let (keys, dropped) = IdempotencyStore::open(
         paths.state_dir.join("idempotency.json"),
         chrono::Local::now().fixed_offset(),
     )?;
-    let listener = tokio::net::TcpListener::bind(serve.listen)
-        .await
-        .with_context(|| serve.listen.to_string())?;
     if dropped > 0 {
         eprintln!(
             "{}",
