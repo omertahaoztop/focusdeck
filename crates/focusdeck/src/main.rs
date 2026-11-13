@@ -81,6 +81,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .await?;
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::Server) => {
+            let paths = Paths::from_env().map_err(anyhow::Error::msg)?;
+            let config = Config::load(&paths)?;
+            focusdeck::server::run(&paths, &config).await?;
+            Ok(ExitCode::SUCCESS)
+        }
         Some(Command::Capture { text }) => {
             let (paths, config, profile) = load_profile(cli.profile.as_deref())?;
             let text = (!text.is_empty()).then(|| text.join(" "));
