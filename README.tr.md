@@ -257,7 +257,7 @@ Her istek `Authorization: Bearer <token>` başlığını taşır. Gövdeler ve c
 | `POST` | `/api/v1/profiles/{p}/captures` | `text`, `at`, `lang`: sunucu notu çözümler ve `capture_into` kutusuna koyar |
 | `GET` | `/api/v1/profiles/{p}/reminders?since=<RFC 3339>` | o andan beri bütün kutuların hatırlatmaları |
 
-`drops` ve `captures` `Idempotency-Key` başlığını alır. Aynı gövdeyle tekrarlanan anahtar işi ikinci kez yapmaz, ilk cevabı döndürür. 90 günden eski anahtarlar sunucu başlarken silinir.
+`drops` ve `captures` `Idempotency-Key` başlığını alır. Aynı gövdeyle aynı hedefe tekrarlanan anahtar işi ikinci kez yapmaz, ilk cevabı döndürür. Aynı anahtar başka bir kutuya ya da profile giderse `KEY_REUSED` alır. Anahtarını almış bir istek, istemci bağlantıyı kapatsa da sonuna kadar çalışır. Yeniden deneyen istemciye kaydedilen cevap döner. 90 günden eski anahtarlar sunucu başlarken ve her yeni anahtar kaydedilirken silinir.
 
 Hata aşağıdaki durum koduyla ve `{"error": {"code": "...", "message": "..."}}` gövdesiyle gelir:
 
@@ -269,7 +269,7 @@ Hata aşağıdaki durum koduyla ve `{"error": {"code": "...", "message": "..."}}
 | `UNSUPPORTED` | 422 | kutunun plugin'i bu eylemi desteklemiyor |
 | `PLUGIN` | 502 | plugin hata verdi ya da cevap vermedi |
 | `IN_PROGRESS` | 409 | aynı `Idempotency-Key` ile gelen istek hâlâ çalışıyor |
-| `KEY_REUSED` | 422 | `Idempotency-Key` başka bir gövdeyle kullanılmış |
+| `KEY_REUSED` | 422 | `Idempotency-Key` başka bir gövdeyle ya da başka bir hedefe kullanılmış |
 | `INTERNAL` | 500 | sunucu kendi durumunu kaydedemedi |
 
 ## Plugin protokolü

@@ -272,6 +272,26 @@ async fn drop_between_local_boxes_moves_once() {
 }
 
 #[tokio::test]
+async fn same_key_and_body_on_another_box_is_key_reused() {
+    let server = Server::start();
+    let (_, captured) = server.capture("stay", None).await;
+    let id = captured["item"]["id"].as_str().unwrap().to_owned();
+    let drop = json!({"item": captured["item"], "from": {"plugin": "local", "id": id}});
+    let drop_into = |b: &str| {
+        server
+            .post(&format!("/profiles/pano/boxes/{b}/drops"))
+            .header("Idempotency-Key", "k-6")
+            .json(&drop)
+    };
+    let (s1, first) = send(drop_into("today")).await;
+    assert_eq!(s1, 200, "{first}");
+    let (s2, second) = send(drop_into("notes")).await;
+    assert_eq!(s2, 422, "{second}");
+    assert_eq!(second["error"]["code"], "KEY_REUSED");
+    assert_eq!(server.titles("today").await, ["stay"]);
+}
+
+#[tokio::test]
 async fn unknown_profile_is_404() {
     let server = Server::start();
     let (status, body) = send(server.get("/profiles/yok")).await;

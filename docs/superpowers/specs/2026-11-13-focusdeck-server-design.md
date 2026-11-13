@@ -114,14 +114,14 @@ Taban yol `/api/v1`. Her istek `Authorization: Bearer <token>` taşır. Token sa
 | `UNSUPPORTED` | 422 | Kutu bu eylemi `describe`'da bildirmiyor ya da bırakma kabul etmiyor |
 | `PLUGIN` | 502 | Plugin hata döndü, zaman aşımı, plugin çöktü. `message` plugin'in metni |
 | `IN_PROGRESS` | 409 | Aynı `Idempotency-Key` ile ilk istek hâlâ sürüyor |
-| `KEY_REUSED` | 422 | Aynı `Idempotency-Key` başka bir gövdeyle geldi |
+| `KEY_REUSED` | 422 | Aynı `Idempotency-Key` başka bir gövdeyle ya da başka bir hedefe geldi |
 
 ### Tekrar gönderme
 
 - `drops` ve `captures` isteğe bağlı `Idempotency-Key` başlığı kabul eder. Anahtar istemcide niyetten bir kez üretilir, yeniden denemede aynısı gönderilir.
-- Sunucu anahtarı `state_dir/idempotency.json` dosyasında tutar: anahtar, gövdenin SHA-256'sı, durum (`in_progress`, `done`), cevap, zaman. Anahtarı sahiplenme tek bir kilit altında yapılır (oku-kontrol et-yaz ayrı adım değil). Aynı anahtar ve aynı gövde: kayıtlı cevap tekrar döner, plugin'e gidilmez. Farklı gövde: `KEY_REUSED`. İlk istek sürüyorsa: `IN_PROGRESS`.
-- Plugin hata dönerse anahtar silinir, istemci aynı anahtarla yeniden deneyebilir. Sunucu cevap yazmadan çökerse anahtar `in_progress` kalır. Açılışta `in_progress` kalan anahtarlar silinir ve log'a yazılır: plugin'in işi yapıp yapmadığı bilinmez, kayıt silinince tekrar deneme ikinci bir not yaratabilir. *(Benim kararım: kaybetmek yerine olası bir çift kayıt.)*
-- Saklama süresi 90 gün. `capture` kuyruğu bir notu sınırsız tutabilir ama 90 günden uzun bağlantısız bir makine gerçekçi değil.
+- Sunucu anahtarı `state_dir/idempotency.json` dosyasında tutar: anahtar, hedefle (`drops` ya da `captures`, profil, kutu) gövdenin birlikte SHA-256'sı, durum (`in_progress`, `done`), cevap, zaman. Anahtarı sahiplenme tek bir kilit altında yapılır (oku-kontrol et-yaz ayrı adım değil). Aynı anahtar, aynı hedef ve aynı gövde: kayıtlı cevap tekrar döner, plugin'e gidilmez. Farklı gövde ya da hedef: `KEY_REUSED`. İlk istek sürüyorsa: `IN_PROGRESS`.
+- Anahtarı alınan iş istekten ayrı bir görevde çalışır. İstemci bağlantıyı kapatsa da plugin çağrısı biter ve cevap kaydedilir, yeniden deneme kayıtlı cevabı alır. Plugin hata dönerse anahtar silinir, istemci aynı anahtarla yeniden deneyebilir. Sunucu cevap yazmadan çökerse anahtar `in_progress` kalır. Açılışta `in_progress` kalan anahtarlar silinir ve log'a yazılır: plugin'in işi yapıp yapmadığı bilinmez, kayıt silinince tekrar deneme ikinci bir not yaratabilir. *(Benim kararım: kaybetmek yerine olası bir çift kayıt.)*
+- Saklama süresi 90 gün. Süresi geçen anahtarlar açılışta ve her yeni anahtar kaydedilirken silinir. `capture` kuyruğu bir notu sınırsız tutabilir ama 90 günden uzun bağlantısız bir makine gerçekçi değil.
 - `actions` anahtar almaz. `done` ikinci kez gelirse plugin "öğe yok" der, istemci bunu hata satırı olarak gösterir (bugünkü davranış).
 
 ### İstemci kipi: TUI

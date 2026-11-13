@@ -144,7 +144,12 @@ impl IdempotencyStore {
                 Claim::Replay(entry.response.clone().unwrap_or(Value::Null))
             });
         }
+        let cutoff = now - Duration::days(RETENTION_DAYS);
         let mut next = keys.clone();
+        next.retain(|_, entry| {
+            entry.state == State::InProgress
+                || DateTime::parse_from_rfc3339(&entry.at).is_ok_and(|at| at >= cutoff)
+        });
         next.insert(
             key.to_owned(),
             Entry {
@@ -187,6 +192,17 @@ impl IdempotencyStore {
 
 pub fn body_hash(body: &[u8]) -> [u8; 32] {
     Sha256::digest(body).into()
+}
+
+/// Binds a key to where it was sent, so one key and body on another box or profile is `Reused`.
+pub fn request_hash(target: &[&str], body: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for part in target {
+        hasher.update(part.as_bytes());
+        hasher.update([0]);
+    }
+    hasher.update(body);
+    hasher.finalize().into()
 }
 
 #[cfg(test)]
@@ -302,6 +318,31 @@ mod tests {
             reopened.claim("fresh", body, now()).unwrap(),
             Claim::Replay(json!(2))
         );
+    }
+
+    #[test]
+    fn a_new_claim_prunes_finished_entries_older_than_90_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        let body = body_hash(b"a");
+        store
+            .claim("old", body, now() - Duration::days(91))
+            .unwrap();
+        store.complete("old", &json!(1)).unwrap();
+        store
+            .claim("stuck", body, now() - Duration::days(91))
+            .unwrap();
+        store
+            .claim("fresh", body, now() - Duration::days(89))
+            .unwrap();
+        store.complete("fresh", &json!(2)).unwrap();
+        store.claim("new", body, now()).unwrap();
+        let file: Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("idempotency.json")).unwrap())
+                .unwrap();
+        let mut kept: Vec<&String> = file["keys"].as_object().unwrap().keys().collect();
+        kept.sort();
+        assert_eq!(kept, ["fresh", "new", "stuck"]);
     }
 
     #[test]

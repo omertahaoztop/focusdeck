@@ -257,7 +257,7 @@ Every request carries `Authorization: Bearer <token>`. Bodies and answers are JS
 | `POST` | `/api/v1/profiles/{p}/captures` | `text`, `at`, `lang`: the server parses the note and files it into `capture_into` |
 | `GET` | `/api/v1/profiles/{p}/reminders?since=<RFC 3339>` | reminders of all boxes since that time |
 
-`drops` and `captures` take an `Idempotency-Key` header. A repeated key with the same body returns the first answer instead of doing the work twice. Keys older than 90 days are dropped when the server starts.
+`drops` and `captures` take an `Idempotency-Key` header. A repeated key with the same body and target returns the first answer instead of doing the work twice; the same key sent to another box or profile gets `KEY_REUSED`. Once a request has its key, the work finishes even if the client hangs up, so a retry gets the stored answer. Keys older than 90 days are dropped when the server starts and whenever a new key is stored.
 
 An error has the status below and the body `{"error": {"code": "...", "message": "..."}}`:
 
@@ -269,7 +269,7 @@ An error has the status below and the body `{"error": {"code": "...", "message":
 | `UNSUPPORTED` | 422 | the box's plugin does not support this action |
 | `PLUGIN` | 502 | the plugin failed or did not answer |
 | `IN_PROGRESS` | 409 | a request with the same `Idempotency-Key` is still running |
-| `KEY_REUSED` | 422 | the `Idempotency-Key` was used with a different body |
+| `KEY_REUSED` | 422 | the `Idempotency-Key` was used with a different body or target |
 | `INTERNAL` | 500 | the server could not save its own state |
 
 ## Plugin protocol

@@ -19,7 +19,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::board::{Board, BoardError};
-use super::idempotency::{Claim, IdempotencyStore, body_hash};
+use super::idempotency::{Claim, IdempotencyStore, request_hash};
 use crate::api::{ActionRequest, ApiError, ApiErrorBody, CaptureRequest, DropRequest, ErrorCode};
 use crate::i18n::{msg, t, t_args};
 
@@ -197,13 +197,10 @@ async fn drops(
     let headers = req.headers().clone();
     match read_json::<DropRequest>(req).await {
         Ok((bytes, body)) => {
-            idempotent(
-                &app,
-                &headers,
-                &bytes,
-                Board::drop(&app.board, &p, &b, body),
-            )
-            .await
+            let hash = request_hash(&["drops", &p, &b], &bytes);
+            let board = Arc::clone(&app.board);
+            let run = async move { Board::drop(&board, &p, &b, body).await };
+            idempotent(&app.keys, &headers, hash, run).await
         }
         Err(rejection) => *rejection,
     }
@@ -212,7 +209,12 @@ async fn drops(
 async fn captures(State(app): State<App>, Params(p): Params<String>, req: Request) -> Response {
     let headers = req.headers().clone();
     match read_json::<CaptureRequest>(req).await {
-        Ok((bytes, body)) => idempotent(&app, &headers, &bytes, app.board.capture(&p, body)).await,
+        Ok((bytes, body)) => {
+            let hash = request_hash(&["captures", &p], &bytes);
+            let board = Arc::clone(&app.board);
+            let run = async move { board.capture(&p, body).await };
+            idempotent(&app.keys, &headers, hash, run).await
+        }
         Err(rejection) => *rejection,
     }
 }
@@ -259,6 +261,10 @@ struct ReleaseGuard {
 }
 
 impl ReleaseGuard {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
     async fn release(&mut self) {
         self.armed = false;
         let (keys, key) = (Arc::clone(&self.keys), self.key.clone());
@@ -307,10 +313,15 @@ fn key_header(headers: &HeaderMap) -> Result<Option<String>, Rejection> {
     }
 }
 
-async fn idempotent<T, F>(app: &App, headers: &HeaderMap, body: &[u8], run: F) -> Response
+async fn idempotent<T, F>(
+    keys: &Arc<IdempotencyStore>,
+    headers: &HeaderMap,
+    hash: [u8; 32],
+    run: F,
+) -> Response
 where
-    T: Serialize,
-    F: Future<Output = Result<T, BoardError>>,
+    T: Serialize + Send + 'static,
+    F: Future<Output = Result<T, BoardError>> + Send + 'static,
 {
     let key = match key_header(headers) {
         Ok(Some(key)) => key,
@@ -318,7 +329,7 @@ where
         Err(rejection) => return *rejection,
     };
     let claimed = {
-        let (keys, key, hash) = (Arc::clone(&app.keys), key.clone(), body_hash(body));
+        let (keys, key) = (Arc::clone(keys), key.clone());
         blocking(move || claim_owned(&keys, &key, hash, now())).await
     };
     let mut guard = match claimed {
@@ -333,24 +344,32 @@ where
         Ok((Claim::New, None)) => unreachable!("a new claim always comes with its guard"),
         Err(e) => return internal(&e),
     };
-    let done = match run.await {
-        Ok(done) => done,
-        Err(e) => {
-            guard.release().await;
-            return board_error(e);
-        }
-    };
-    // the plugin did the work: from here the key must stay claimed
-    guard.armed = false;
-    let stored: Value = serde_json::to_value(&done).expect("API bodies serialize");
-    let (keys, saved) = (Arc::clone(&app.keys), stored.clone());
-    log_store_error(blocking(move || keys.complete(&key, &saved)).await);
-    json_response(StatusCode::OK, &stored)
+    let keys = Arc::clone(keys);
+    // detached so a client hanging up mid-call cannot free a key whose work may still land
+    let work = tokio::spawn(async move {
+        let done = match run.await {
+            Ok(done) => done,
+            Err(e) => {
+                guard.release().await;
+                return board_error(e);
+            }
+        };
+        guard.disarm();
+        let stored: Value = serde_json::to_value(&done).expect("API bodies serialize");
+        let saved = stored.clone();
+        log_store_error(blocking(move || keys.complete(&key, &saved)).await);
+        json_response(StatusCode::OK, &stored)
+    });
+    match work.await {
+        Ok(response) => response,
+        Err(e) => internal(&io::Error::other(e)),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::idempotency::body_hash;
 
     fn store() -> (tempfile::TempDir, Arc<IdempotencyStore>) {
         let dir = tempfile::tempdir().unwrap();
@@ -403,5 +422,33 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         panic!("the claim was never released");
+    }
+
+    #[tokio::test]
+    async fn a_hung_up_request_still_finishes_and_keeps_its_key() {
+        let (_dir, keys) = store();
+        let mut headers = HeaderMap::new();
+        headers.insert("idempotency-key", "k".parse().unwrap());
+        let hash = body_hash(b"a");
+        let run = async {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            Ok::<_, BoardError>(serde_json::json!({"ok": 1}))
+        };
+        let hung_up = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            idempotent(&keys, &headers, hash, run),
+        )
+        .await;
+        assert!(hung_up.is_err());
+        for _ in 0..100 {
+            match keys.claim("k", hash, now()).unwrap() {
+                Claim::InProgress => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                other => {
+                    assert_eq!(other, Claim::Replay(serde_json::json!({"ok": 1})));
+                    return;
+                }
+            }
+        }
+        panic!("the detached work never completed the key");
     }
 }
