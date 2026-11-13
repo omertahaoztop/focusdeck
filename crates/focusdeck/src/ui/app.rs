@@ -115,6 +115,7 @@ pub struct App {
     pressed: Option<Pressed>,
     pointer: Option<(u16, u16, Option<Hit>)>,
     last_click: Option<(usize, usize, Instant)>,
+    server_links: bool,
 }
 
 /// Compares `İ`, `I`, `ı` and `i` equal and ignores a combining dot above, in every UI language.
@@ -204,7 +205,14 @@ impl App {
             pressed: None,
             pointer: None,
             last_click: None,
+            server_links: false,
         }
+    }
+
+    /// The server closes plan-linked items after real lists, so this client never sends those `done` actions.
+    pub fn with_server_links(mut self) -> App {
+        self.server_links = true;
+        self
     }
 
     /// Present only once the pointer has left the pressed cell, so a plain click never shows it.
@@ -532,7 +540,7 @@ impl App {
     }
 
     fn link_closures(&mut self, idx: usize, view: View, items: &[Item]) -> Vec<Effect> {
-        if view != View::Full {
+        if view != View::Full || self.server_links {
             return Vec::new();
         }
         let Some(target) = self.plan_target(idx) else {
@@ -2368,5 +2376,13 @@ mod tests {
             list(&mut app, REDMINE, View::Full, vec![]),
             vec![plain_action(SOZLU, "t2", "done", json!({}))]
         );
+    }
+
+    #[test]
+    fn with_server_links_sends_no_closure_done() {
+        let mut app = loaded_app().with_server_links();
+        for _ in 0..3 {
+            assert!(list(&mut app, REDMINE, View::Full, vec![]).is_empty());
+        }
     }
 }

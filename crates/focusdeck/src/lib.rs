@@ -16,6 +16,7 @@ pub mod private;
 pub mod profile;
 pub mod queue;
 pub mod remind;
+pub mod remote;
 pub mod secrets;
 pub mod server;
 pub mod ui;

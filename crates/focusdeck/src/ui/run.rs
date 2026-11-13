@@ -2,6 +2,7 @@
 
 use std::io::{Stdout, stdout};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -26,15 +27,17 @@ use tokio::time::MissedTickBehavior;
 
 use super::app::{App, Effect};
 use super::{layout, render};
+use crate::api::ProfileView;
 use crate::capture;
 use crate::config::Config;
-use crate::host::PluginHost;
+use crate::host::{BoxHost, PluginHost};
 use crate::i18n::{self, msg, t, t_args};
 use crate::install;
 use crate::links::openable;
 use crate::local::LOCAL;
 use crate::paths::Paths;
 use crate::profile::Profile;
+use crate::remote::{RemoteBox, RemoteClient};
 use crate::secrets;
 use crate::worker::{self, BoxCmd, BoxEvent};
 
@@ -323,16 +326,49 @@ fn local_config(
     config
 }
 
-pub async fn tui(paths: &Paths, cfg: &Config, profile: Profile) -> anyhow::Result<()> {
+/// Where the board comes from: a profile file on this machine or a profile served by `focusdeck server`.
+// built once at startup
+#[allow(clippy::large_enum_variant)]
+pub enum Deck {
+    Local(Profile),
+    Remote {
+        client: Arc<RemoteClient>,
+        name: String,
+        view: ProfileView,
+    },
+}
+
+pub async fn tui(paths: &Paths, cfg: &Config, deck: Deck) -> anyhow::Result<()> {
+    let (profile, words, remote) = match deck {
+        Deck::Local(profile) => {
+            let words = capture::Words::new(i18n::current(), &cfg.capture_words);
+            (profile, words, None)
+        }
+        Deck::Remote { client, name, view } => {
+            let words = capture::Words::new(i18n::current(), &view.capture_words);
+            (view.to_profile(), words, Some((client, name, view)))
+        }
+    };
     let (mut terminal, _guard) = enter_terminal()?;
     let mut app = App::new(&profile);
+    if remote.is_some() {
+        app = app.with_server_links();
+    }
     let home = dirs::home_dir().unwrap_or_default();
     let (event_tx, mut event_rx) = mpsc::channel::<BoxEvent>(64);
     let (tick_tx, mut tick_rx) = mpsc::channel::<usize>(64);
     let mut tasks: Vec<JoinHandle<()>> = Vec::new();
     let mut cmds = Vec::new();
     for (idx, spec) in profile.boxes.iter().enumerate() {
-        match build_host(paths, &home, spec) {
+        let host = match &remote {
+            Some((client, name, view)) => Ok(BoxHost::Remote(RemoteBox::new(
+                client.clone(),
+                name.clone(),
+                &view.boxes[idx],
+            ))),
+            None => build_host(paths, &home, spec).map(BoxHost::Process),
+        };
+        match host {
             Ok(host) => {
                 let (tx, rx) = mpsc::channel(COMMAND_QUEUE);
                 tasks.push(worker::spawn(idx, host, rx, event_tx.clone()));
@@ -347,7 +383,7 @@ pub async fn tui(paths: &Paths, cfg: &Config, profile: Profile) -> anyhow::Resul
     }
     let rt = Runtime {
         profile: &profile,
-        words: capture::Words::new(i18n::current(), &cfg.capture_words),
+        words,
         cmds,
     };
     let result = event_loop(&mut terminal, &mut app, &rt, &mut event_rx, &mut tick_rx).await;

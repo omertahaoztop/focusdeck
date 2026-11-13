@@ -9,6 +9,7 @@ use focusdeck_i18n::Localizer;
 use focusdeck_protocol::{Describe, PROTOCOL_VERSION, Request, Response};
 
 use crate::i18n::{self, msg, t, t_args};
+use crate::remote::RemoteBox;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -29,6 +30,7 @@ pub enum HostError {
     BadLine(String),
     Plugin(String),
     Protocol { expected: u32, got: u32 },
+    Remote(String),
 }
 
 impl HostError {
@@ -42,7 +44,7 @@ impl HostError {
             HostError::BadLine(line) => {
                 l.t_args(msg::HOST_BAD_LINE, &[("line", line.as_str().into())])
             }
-            HostError::Plugin(message) => message.clone(),
+            HostError::Plugin(message) | HostError::Remote(message) => message.clone(),
             HostError::Protocol { expected, got } => l.t_args(
                 msg::HOST_PROTOCOL_MISMATCH,
                 &[
@@ -231,6 +233,46 @@ impl PluginHost {
             max_line: self.max_line,
             next_id: 0,
         })
+    }
+}
+
+/// What a worker drives: a plugin process on this machine or a box on a focusdeck server.
+// one value per box for the life of the run, so the size gap is irrelevant
+#[allow(clippy::large_enum_variant)]
+pub enum BoxHost {
+    Process(PluginHost),
+    Remote(RemoteBox),
+}
+
+impl From<PluginHost> for BoxHost {
+    fn from(host: PluginHost) -> BoxHost {
+        BoxHost::Process(host)
+    }
+}
+
+impl From<RemoteBox> for BoxHost {
+    fn from(host: RemoteBox) -> BoxHost {
+        BoxHost::Remote(host)
+    }
+}
+
+impl BoxHost {
+    pub async fn describe(&mut self) -> Result<Describe, HostError> {
+        match self {
+            BoxHost::Process(host) => host.describe().await,
+            BoxHost::Remote(host) => host.describe().await,
+        }
+    }
+
+    pub async fn call<P: Serialize, R: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: &P,
+    ) -> Result<R, HostError> {
+        match self {
+            BoxHost::Process(host) => host.call(method, params).await,
+            BoxHost::Remote(host) => host.call(method, params).await,
+        }
     }
 }
 
