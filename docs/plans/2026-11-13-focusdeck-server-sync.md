@@ -106,11 +106,11 @@ Plan A'da `local` kaydına, plugin protokolüne ve plugin'lere dokunulmaz. Sunuc
 **Interfaces:**
 - Produces: `config::ServeConfig { listen: std::net::SocketAddr, token_file: String }` (`listen` varsayılanı `127.0.0.1:8740`), `config::ServerConfig { url: String, token_file: String }`, `Config.serve: Option<ServeConfig>`, `Config.server: Option<ServerConfig>`, `CaptureWords: Serialize`. `secrets::read_token(file: &str, home: &Path) -> Result<String, SecretError>` (sondaki satır sonu kırpılır), yeni `SecretError::TokenTooShort(PathBuf)`. `install::https_or_loopback(url: &str) -> bool`.
 
-- [ ] **Step 1: Failing testler.** `config.rs`: `config_without_server_sections_equals_default` (bugünkü örnek dosya, `serve` ve `server` `None`), `config_reads_serve_and_server` (`listen` verilmezse `127.0.0.1:8740`), `server_url_plain_http_is_refused_unless_loopback` (`http://deck.example.com` → `Config::load` hata, `http://127.0.0.1:8740` kabul). `secrets.rs`: `read_token_rejects_short_and_exposed` (31 karakter → `TokenTooShort`, 0644 → `Exposed`, 0600 ve `"abc…\n"` → satır sonu kırpılmış değer), `token_error_text_has_no_token` (hata metninde token değeri geçmez).
-- [ ] **Step 2: Çalıştır, düştüğünü gör.** `cargo test -p focusdeck config:: secrets::` → derleme hatası ya da FAIL.
-- [ ] **Step 3: Uygula.** `Config`'te `deny_unknown_fields` korunur. URL kuralı `Config::load` içinde `https_or_loopback` ile, hata metni `msg::ERROR_SERVER_URL_INSECURE`.
-- [ ] **Step 4: Testler geçer, sonra üç kontrol komutu temiz.**
-- [ ] **Step 5: Commit** `Add serve and server settings with token checks`
+- [x] **Step 1: Failing testler.** `config.rs`: `config_without_server_sections_equals_default` (bugünkü örnek dosya, `serve` ve `server` `None`), `config_reads_serve_and_server` (`listen` verilmezse `127.0.0.1:8740`), `server_url_plain_http_is_refused_unless_loopback` (`http://deck.example.com` → `Config::load` hata, `http://127.0.0.1:8740` kabul). `secrets.rs`: `read_token_rejects_short_and_exposed` (31 karakter → `TokenTooShort`, 0644 → `Exposed`, 0600 ve `"abc…\n"` → satır sonu kırpılmış değer), `token_error_text_has_no_token` (hata metninde token değeri geçmez).
+- [x] **Step 2: Çalıştır, düştüğünü gör.** `cargo test -p focusdeck config:: secrets::` → derleme hatası ya da FAIL.
+- [x] **Step 3: Uygula.** `Config`'te `deny_unknown_fields` korunur. URL kuralı `Config::load` içinde `https_or_loopback` ile, hata metni `msg::ERROR_SERVER_URL_INSECURE`.
+- [x] **Step 4: Testler geçer, sonra üç kontrol komutu temiz.**
+- [x] **Step 5: Commit** `Add serve and server settings with token checks`
 
 ### Task 2: Ortak dosya yardımcıları
 
@@ -121,11 +121,11 @@ Plan A'da `local` kaydına, plugin protokolüne ve plugin'lere dokunulmaz. Sunuc
 **Interfaces:**
 - Produces: `fsio::write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()>` (`.tmp` + `fsync` + `rename` + dizin `fsync`, mod 0600), `fsio::unique_id() -> String` (bugünkü `new_id` üreteci).
 
-- [ ] **Step 1:** `fsio.rs` testi `write_atomic_leaves_no_tmp_and_mode_0600`, `unique_ids_differ_across_calls`.
-- [ ] **Step 2:** Düştüğünü gör.
-- [ ] **Step 3:** `Store::write` ve `new_id` bunları kullanır, davranış değişmez. `local/store.rs` testleri değişmeden geçer.
-- [ ] **Step 4:** Üç kontrol komutu temiz.
-- [ ] **Step 5: Commit** `Move atomic write and id generation into fsio`
+- [x] **Step 1:** `fsio.rs` testi `write_atomic_leaves_no_tmp_and_mode_0600`, `unique_ids_differ_across_calls`.
+- [x] **Step 2:** Düştüğünü gör.
+- [x] **Step 3:** `Store::write` ve `new_id` bunları kullanır, davranış değişmez. `local/store.rs` testleri değişmeden geçer.
+- [x] **Step 4:** Üç kontrol komutu temiz.
+- [x] **Step 5: Commit** `Move atomic write and id generation into fsio`
 
 ### Task 3: API tipleri
 
@@ -148,11 +148,11 @@ Plan A'da `local` kaydına, plugin protokolüne ve plugin'lere dokunulmaz. Sunuc
   - `BoxReminder { #[serde(rename = "box")] box_id: String, at, item: Item }`, `RemindersResponse { reminders: Vec<BoxReminder> }`
   - `ErrorCode` (`UNAUTHORIZED`, `NOT_FOUND`, `INVALID`, `UNSUPPORTED`, `PLUGIN`, `IN_PROGRESS`, `KEY_REUSED`; `SCREAMING_SNAKE_CASE`), `ErrorCode::status(self) -> u16`, `ApiError { error: ApiErrorBody { code: ErrorCode, message: String } }`
 
-- [ ] **Step 1:** Testler: `box_view_never_carries_config` (`config = { key_file = "~/x.key", email = "a@b" }` olan `BoxSpec` → JSON'da `config`, `key_file`, `a@b` geçmez), `error_codes_serialize_upper_snake_and_map_status` (`PLUGIN` → 502, `IN_PROGRESS` → 409), `profile_view_round_trips_to_profile` (konum, boyut, `refresh`, `plan_into`, `capture_into` korunur).
-- [ ] **Step 2:** Düştüğünü gör.
-- [ ] **Step 3:** Uygula.
-- [ ] **Step 4:** Üç kontrol komutu temiz.
-- [ ] **Step 5: Commit** `Add API request and response types`
+- [x] **Step 1:** Testler: `box_view_never_carries_config` (`config = { key_file = "~/x.key", email = "a@b" }` olan `BoxSpec` → JSON'da `config`, `key_file`, `a@b` geçmez), `error_codes_serialize_upper_snake_and_map_status` (`PLUGIN` → 502, `IN_PROGRESS` → 409), `profile_view_round_trips_to_profile` (konum, boyut, `refresh`, `plan_into`, `capture_into` korunur).
+- [x] **Step 2:** Düştüğünü gör.
+- [x] **Step 3:** Uygula.
+- [x] **Step 4:** Üç kontrol komutu temiz.
+- [x] **Step 5: Commit** `Add API request and response types`
 
 ### Task 4: Tekrar gönderme kaydı
 
@@ -166,11 +166,11 @@ Plan A'da `local` kaydına, plugin protokolüne ve plugin'lere dokunulmaz. Sunuc
 - Produces: `IdempotencyStore::open(path: PathBuf, now: DateTime<FixedOffset>) -> io::Result<(IdempotencyStore, usize /* silinen in_progress */)>`, `claim(&self, key: &str, body_sha256: [u8; 32], now) -> io::Result<Claim>`, `complete(&self, key: &str, response: &Value) -> io::Result<()>`, `release(&self, key: &str) -> io::Result<()>`. `enum Claim { New, Replay(Value), InProgress, Reused }`. İçeride `std::sync::Mutex`, her değişiklik `write_atomic` ile diske.
 - Dosya biçimi: `{"version": 1, "keys": {"<key>": {"body": "<hex>", "state": "in_progress"|"done", "response": …, "at": RFC3339}}}`.
 
-- [ ] **Step 1:** Testler: `same_key_same_body_replays`, `same_key_other_body_is_reused`, `claim_while_in_progress`, `release_allows_retry`, `reopen_drops_in_progress_and_counts_them`, `entries_older_than_90_days_are_pruned_on_open`, `eight_threads_claiming_one_key_get_one_new`.
-- [ ] **Step 2:** Düştüğünü gör.
-- [ ] **Step 3:** Uygula. Sahiplenme oku-kontrol-yaz tek kilit içinde.
-- [ ] **Step 4:** Üç kontrol komutu temiz.
-- [ ] **Step 5: Commit** `Add idempotency key store for the server`
+- [x] **Step 1:** Testler: `same_key_same_body_replays`, `same_key_other_body_is_reused`, `claim_while_in_progress`, `release_allows_retry`, `reopen_drops_in_progress_and_counts_them`, `entries_older_than_90_days_are_pruned_on_open`, `eight_threads_claiming_one_key_get_one_new`.
+- [x] **Step 2:** Düştüğünü gör.
+- [x] **Step 3:** Uygula. Sahiplenme oku-kontrol-yaz tek kilit içinde.
+- [x] **Step 4:** Üç kontrol komutu temiz.
+- [x] **Step 5: Commit** `Add idempotency key store for the server`
 
 ### Task 5: Sunucu panosu
 
@@ -185,11 +185,11 @@ Plan A'da `local` kaydına, plugin protokolüne ve plugin'lere dokunulmaz. Sunuc
 - Produces: `Board::load(paths: &Paths, cfg: &Config, home: &Path) -> anyhow::Result<Board>` (`profiles/*.toml` hepsi, biri bozuksa hata, hiç profil yoksa hata). Yöntemler (hepsi `async`, `&self`): `profiles() -> ProfilesResponse`, `profile_view(p) -> Result<ProfileView, BoardError>`, `items(p, b, now) -> Result<ItemsResponse, BoardError>`, `action(p, b, ActionRequest) -> Result<ActionResponse, BoardError>`, `drop(p, b, DropRequest) -> Result<DropResponse, BoardError>`, `capture(p, CaptureRequest) -> Result<CaptureResponse, BoardError>`, `reminders(p, since) -> Result<RemindersResponse, BoardError>`. `enum BoardError { NotFound, Invalid(String), Unsupported(String), Plugin(String) }`, `BoardError::code(&self) -> ErrorCode`.
 - Kutu durumu: `tokio::sync::Mutex<PluginHost>` + `std::sync::Mutex<Cache { items, listed_at, empty_lists }>`. Kural: spec'teki "Sunucu" bölümü (önbellek süresi `refresh`, başarılı eylem/bırakmada plugin bazlı düşürme bütün profillerde, plan bağı yalnız gerçek listede, iki kutu kilidi aynı anda yok, `describe` hatasında her istekte yeniden deneme).
 
-- [ ] **Step 1:** Testler: `items_within_refresh_come_from_cache` (fake plugin çağrı sayacı 1), `action_drops_cache_of_boxes_with_same_plugin`, `unsupported_action_is_refused_without_calling_plugin`, `unknown_profile_or_box_is_not_found`, `crashed_plugin_answers_plugin_then_recovers`, `plan_link_closes_task_on_server_after_two_empty_lists`, `concurrent_actions_on_one_box_are_serialized` (fake plugin aynı anda iki istek görürse hata verir), `capture_without_capture_into_is_invalid`.
-- [ ] **Step 2:** Düştüğünü gör.
-- [ ] **Step 3:** Uygula. `fake-plugin`'e test için gereken davranış (çağrı sayacı, eşzamanlılık denetimi, çökme) eksikse `crates/fake-plugin/src/main.rs`'e eklenir.
-- [ ] **Step 4:** Üç kontrol komutu temiz.
-- [ ] **Step 5: Commit** `Add server board that runs plugins and caches lists`
+- [x] **Step 1:** Testler: `items_within_refresh_come_from_cache` (fake plugin çağrı sayacı 1), `action_drops_cache_of_boxes_with_same_plugin`, `unsupported_action_is_refused_without_calling_plugin`, `unknown_profile_or_box_is_not_found`, `crashed_plugin_answers_plugin_then_recovers`, `plan_link_closes_task_on_server_after_two_empty_lists`, `concurrent_actions_on_one_box_are_serialized` (fake plugin aynı anda iki istek görürse hata verir), `capture_without_capture_into_is_invalid`.
+- [x] **Step 2:** Düştüğünü gör.
+- [x] **Step 3:** Uygula. `fake-plugin`'e test için gereken davranış (çağrı sayacı, eşzamanlılık denetimi, çökme) eksikse `crates/fake-plugin/src/main.rs`'e eklenir.
+- [x] **Step 4:** Üç kontrol komutu temiz.
+- [x] **Step 5: Commit** `Add server board that runs plugins and caches lists`
 
 ### Task 6: HTTP katmanı ve `focusdeck server`
 
@@ -205,11 +205,11 @@ Plan A'da `local` kaydına, plugin protokolüne ve plugin'lere dokunulmaz. Sunuc
 - Kimlik: `Authorization: Bearer <t>`, iki tarafın SHA-256 özeti sabit zamanlı karşılaştırılır. Gövde sınırı 1 MiB. `drops` ve `captures`'ta `Idempotency-Key` varsa gövde baytlarının SHA-256'sıyla `claim`, plugin hatasında `release`.
 - Açılışta tek satır (`msg::SERVER_LISTENING`, adres ile), silinen `in_progress` anahtar sayısı sıfırdan büyükse log satırı.
 
-- [ ] **Step 1:** `tests/server.rs`, gerçek `CARGO_BIN_EXE_focusdeck server` süreci, geçici `FOCUSDECK_*_DIR`, iki `local` kutulu profil: `requests_without_valid_token_get_401` (başlıksız, yanlış token, `Bearer` öneksiz; gövde `{"error":{"code":"UNAUTHORIZED",…}}`, token gövdede yok), `profile_has_no_config_or_secret_paths`, `capture_then_list_shows_note`, `capture_with_same_key_twice_creates_one_note`, `same_key_other_body_is_key_reused`, `drop_between_local_boxes_moves_once`, `unknown_profile_is_404`, `server_without_serve_section_exits_with_error`.
-- [ ] **Step 2:** Düştüğünü gör.
-- [ ] **Step 3:** Uygula.
-- [ ] **Step 4:** Üç kontrol komutu temiz.
-- [ ] **Step 5: Commit** `Serve the board over an authenticated REST API`
+- [x] **Step 1:** `tests/server.rs`, gerçek `CARGO_BIN_EXE_focusdeck server` süreci, geçici `FOCUSDECK_*_DIR`, iki `local` kutulu profil: `requests_without_valid_token_get_401` (başlıksız, yanlış token, `Bearer` öneksiz; gövde `{"error":{"code":"UNAUTHORIZED",…}}`, token gövdede yok), `profile_has_no_config_or_secret_paths`, `capture_then_list_shows_note`, `capture_with_same_key_twice_creates_one_note`, `same_key_other_body_is_key_reused`, `drop_between_local_boxes_moves_once`, `unknown_profile_is_404`, `server_without_serve_section_exits_with_error`.
+- [x] **Step 2:** Düştüğünü gör.
+- [x] **Step 3:** Uygula.
+- [x] **Step 4:** Üç kontrol komutu temiz.
+- [x] **Step 5: Commit** `Serve the board over an authenticated REST API`
 
 ### Task 7: Uzak kutu ve istemci kipinde TUI
 
@@ -221,11 +221,11 @@ Plan A'da `local` kaydına, plugin protokolüne ve plugin'lere dokunulmaz. Sunuc
 - Consumes: `ServerConfig`, `read_token`, `api::*`.
 - Produces: `RemoteClient::connect(cfg: &ServerConfig, home: &Path) -> Result<RemoteClient, RemoteError>` ve `profiles`, `profile`, `items`, `action`, `drop(…, key: Option<&str>)`, `capture(…, key: Option<&str>)`, `reminders` (hepsi `async`). `enum RemoteError { Network(String), Unauthorized, Api { code: ErrorCode, message: String } }`. `RemoteBox::new(client: Arc<RemoteClient>, profile: String, view: &BoxView)`. `host::BoxHost { Process(PluginHost), Remote(RemoteBox) }` ve `describe()`, `call<P, R>(method, params)` (`list`, `action`, `drop`, `reminders` uçlara eşlenir, `describe` hatasında profil yeniden çekilir). `HostError::Remote(String)`. `remote::resolve_profile(client, cli, env, cfg) -> anyhow::Result<String>`. `App::with_server_links(self) -> App` (plan bağını kapatır). `ui::run::Deck { Local(Profile), Remote { client: Arc<RemoteClient>, view: ProfileView } }`, `tui(paths, cfg, deck)`.
 
-- [ ] **Step 1:** Testler (`mockito`): `remote_box_lists_items`, `remote_plugin_error_message_passes_through`, `unauthorized_names_server_address` (metinde token yok), `remote_box_network_error_is_red_line_then_recovers`, `resolve_profile_follows_flag_env_default_single` ; `app.rs`: `with_server_links_sends_no_closure_done`.
-- [ ] **Step 2:** Düştüğünü gör.
-- [ ] **Step 3:** Uygula. Worker `BoxHost` sürer, `Process` yolunda davranış aynı. İstemci kipinde `Words::new(i18n::current(), &view.capture_words)`.
-- [ ] **Step 4:** Üç kontrol komutu temiz. Mevcut `tests/host.rs`, `tests/commands.rs` değişmeden geçer.
-- [ ] **Step 5: Commit** `Run the TUI against a focusdeck server`
+- [x] **Step 1:** Testler (`mockito`): `remote_box_lists_items`, `remote_plugin_error_message_passes_through`, `unauthorized_names_server_address` (metinde token yok), `remote_box_network_error_is_red_line_then_recovers`, `resolve_profile_follows_flag_env_default_single` ; `app.rs`: `with_server_links_sends_no_closure_done`.
+- [x] **Step 2:** Düştüğünü gör.
+- [x] **Step 3:** Uygula. Worker `BoxHost` sürer, `Process` yolunda davranış aynı. İstemci kipinde `Words::new(i18n::current(), &view.capture_words)`.
+- [x] **Step 4:** Üç kontrol komutu temiz. Mevcut `tests/host.rs`, `tests/commands.rs` değişmeden geçer.
+- [x] **Step 5: Commit** `Run the TUI against a focusdeck server`
 
 ### Task 8: İstemci kipinde `capture` ve `remind`
 
@@ -238,20 +238,20 @@ Plan A'da `local` kaydına, plugin protokolüne ve plugin'lere dokunulmaz. Sunuc
 - Consumes: `RemoteClient::capture`, `RemoteClient::reminders`, `fsio::unique_id`.
 - Produces: `Queued.id: Option<String>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`), `Queued::new(text, at, lang) -> Queued` (`id` dolu), `Queued::key(&self) -> String` (`id` ya da `sha256(at.to_rfc3339() + "\n" + text)` hex).
 
-- [ ] **Step 1:** Testler: `old_queue_line_without_id_parses_and_keeps_key` (iki okumada aynı anahtar), `remote_capture_sends_entry_key` (mockito `Idempotency-Key` başlığını eşler), `remote_invalid_capture_is_dropped_from_queue_and_notified`, `unreachable_server_keeps_note_in_queue`, `remote_remind_prints_due_reminders`.
-- [ ] **Step 2:** Düştüğünü gör.
-- [ ] **Step 3:** Uygula. Yerel kipte `capture` akışı birebir aynı kalır.
-- [ ] **Step 4:** Üç kontrol komutu temiz.
-- [ ] **Step 5: Commit** `Deliver captures and reminders through the server`
+- [x] **Step 1:** Testler: `old_queue_line_without_id_parses_and_keeps_key` (iki okumada aynı anahtar), `remote_capture_sends_entry_key` (mockito `Idempotency-Key` başlığını eşler), `remote_invalid_capture_is_dropped_from_queue_and_notified`, `unreachable_server_keeps_note_in_queue`, `remote_remind_prints_due_reminders`.
+- [x] **Step 2:** Düştüğünü gör.
+- [x] **Step 3:** Uygula. Yerel kipte `capture` akışı birebir aynı kalır.
+- [x] **Step 4:** Üç kontrol komutu temiz.
+- [x] **Step 5: Commit** `Deliver captures and reminders through the server`
 
 ### Task 9: Belgeler
 
 **Files:**
 - Modify: `README.md`, `README.tr.md`, `crates/focusdeck/Cargo.toml` (sürüm `0.4.0`)
 
-- [ ] **Step 1:** İki README'ye "Sunucu" bölümü: `[serve]`, `[server]`, `openssl rand -hex 32` ile token, Caddy örneği (`reverse_proxy 127.0.0.1:8740`), istemci kipinde neyin sunucudan geldiği, API tablosu ve hata kodları. "Ayarlar" bölümündeki anahtar listesine iki bölüm.
-- [ ] **Step 2:** Üç kontrol komutu temiz. README'deki Türkçe metin `turkish-anti-ai-skill` denetiminden geçer.
-- [ ] **Step 3: Commit** `Document the server and client mode`
+- [x] **Step 1:** İki README'ye "Sunucu" bölümü: `[serve]`, `[server]`, `openssl rand -hex 32` ile token, Caddy örneği (`reverse_proxy 127.0.0.1:8740`), istemci kipinde neyin sunucudan geldiği, API tablosu ve hata kodları. "Ayarlar" bölümündeki anahtar listesine iki bölüm.
+- [x] **Step 2:** Üç kontrol komutu temiz. README'deki Türkçe metin `turkish-anti-ai-skill` denetiminden geçer.
+- [x] **Step 3: Commit** `Document the server and client mode`
 
 ---
 
