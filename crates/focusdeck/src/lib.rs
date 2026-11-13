@@ -1,3 +1,4 @@
+pub mod api;
 pub mod capture;
 pub mod capture_cmd;
 pub mod cli;
