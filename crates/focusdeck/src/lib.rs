@@ -3,6 +3,7 @@ pub mod capture_cmd;
 pub mod cli;
 pub mod config;
 pub mod duration;
+pub mod fsio;
 pub mod host;
 pub mod i18n;
 pub mod install;
