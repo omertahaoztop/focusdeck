@@ -17,7 +17,7 @@ Görüntülerdeki veriler uydurmadır.
 ## Kurulum
 
 ```sh
-cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.3.0 --locked focusdeck
+cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.4.0 --locked focusdeck
 ```
 
 Hazır plugin'ler [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) reposunda. Dizinden kurulur:

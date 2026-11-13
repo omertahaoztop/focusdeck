@@ -17,7 +17,7 @@ The data in the screenshots is made up.
 ## Install
 
 ```sh
-cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.3.0 --locked focusdeck
+cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.4.0 --locked focusdeck
 ```
 
 Ready-made plugins live in the [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) repository and are installed from its index:
