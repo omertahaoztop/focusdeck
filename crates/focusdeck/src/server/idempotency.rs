@@ -314,6 +314,63 @@ mod tests {
         );
     }
 
+    const A_HEX: &str = "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb";
+
+    #[test]
+    fn file_format_is_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        let path = dir.path().join("idempotency.json");
+        let read = || -> Value { serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap() };
+        store.claim("k", body_hash(b"a"), now()).unwrap();
+        assert_eq!(
+            read(),
+            json!({"version": 1, "keys": {"k": {
+                "body": A_HEX, "state": "in_progress", "at": "2026-11-13T10:00:00+03:00"
+            }}})
+        );
+        store.complete("k", &json!({"ok": 1})).unwrap();
+        assert_eq!(
+            read(),
+            json!({"version": 1, "keys": {"k": {
+                "body": A_HEX, "state": "done", "response": {"ok": 1},
+                "at": "2026-11-13T10:00:00+03:00"
+            }}})
+        );
+    }
+
+    #[test]
+    fn opens_a_hand_written_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("idempotency.json");
+        let raw = format!(
+            r#"{{"version":1,"keys":{{"k":{{"body":"{A_HEX}","state":"done","response":{{"ok":1}},"at":"2026-11-13T09:00:00+03:00"}}}}}}"#
+        );
+        std::fs::write(&path, raw).unwrap();
+        let (store, dropped) = IdempotencyStore::open(path, now()).unwrap();
+        assert_eq!(dropped, 0);
+        assert_eq!(
+            store.claim("k", body_hash(b"a"), now()).unwrap(),
+            Claim::Replay(json!({"ok": 1}))
+        );
+    }
+
+    #[test]
+    fn hash_bytes_are_zero_padded_lowercase_hex() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = open(&dir);
+        let mut hash = [1u8; 32];
+        hash[31] = 0xab;
+        store.claim("k", hash, now()).unwrap();
+        let file: Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("idempotency.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            file["keys"]["k"]["body"],
+            json!(format!("{}ab", "01".repeat(31)))
+        );
+    }
+
     #[test]
     fn corrupt_file_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
