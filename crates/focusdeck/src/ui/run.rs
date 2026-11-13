@@ -248,27 +248,61 @@ fn open_url(app: &mut App, url: &str) {
     }
 }
 
+#[derive(Debug)]
+pub enum BuildError {
+    Secret(crate::secrets::SecretError),
+    Other(String),
+}
+
+impl BuildError {
+    /// The text safe to hand to API clients: it never names a secret file.
+    pub fn public(&self) -> String {
+        match self {
+            BuildError::Secret(e) => e.without_path(i18n::current()),
+            BuildError::Other(message) => message.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for BuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildError::Secret(e) => e.fmt(f),
+            BuildError::Other(message) => f.write_str(message),
+        }
+    }
+}
+
 pub fn build_host(
     paths: &Paths,
     home: &std::path::Path,
     spec: &crate::profile::BoxSpec,
 ) -> Result<PluginHost, String> {
-    install::validate_name(&spec.plugin).map_err(|e| e.to_string())?;
+    build_host_typed(paths, home, spec).map_err(|e| e.to_string())
+}
+
+pub fn build_host_typed(
+    paths: &Paths,
+    home: &std::path::Path,
+    spec: &crate::profile::BoxSpec,
+) -> Result<PluginHost, BuildError> {
+    let other = |e: &dyn std::fmt::Display| BuildError::Other(e.to_string());
+    install::validate_name(&spec.plugin).map_err(|e| other(&e))?;
     let (exe, args) = if spec.plugin == LOCAL {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe = std::env::current_exe().map_err(|e| other(&e))?;
         (exe, vec!["serve-local".to_owned()])
     } else {
         let exe = paths.plugin_dir().join(&spec.plugin);
         if !exe.is_file() {
-            return Err(t_args(
+            return Err(BuildError::Other(t_args(
                 msg::ERROR_PLUGIN_NOT_INSTALLED,
                 &[("plugin", spec.plugin.as_str().into())],
-            ));
+            )));
         }
-        install::verify_installed(&paths.plugin_dir(), &spec.plugin).map_err(|e| e.to_string())?;
+        install::verify_installed(&paths.plugin_dir(), &spec.plugin).map_err(|e| other(&e))?;
         (exe, Vec::new())
     };
-    let mut config = secrets::plugin_config(spec, home).map_err(|e| e.to_string())?;
+    let mut config = secrets::plugin_config(spec, home).map_err(BuildError::Secret)?;
     if spec.plugin == LOCAL {
         config = local_config(spec, config);
     }

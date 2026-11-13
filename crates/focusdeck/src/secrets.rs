@@ -42,6 +42,18 @@ impl SecretError {
     }
 }
 
+impl SecretError {
+    /// Same failure without the file name, for text that leaves the machine.
+    pub fn without_path(&self, l: &Localizer) -> String {
+        l.t(match self {
+            SecretError::Missing(_) => msg::BOARD_SECRET_MISSING,
+            SecretError::Exposed(_) => msg::BOARD_SECRET_EXPOSED,
+            SecretError::Unreadable { .. } => msg::BOARD_SECRET_UNREADABLE,
+            SecretError::TokenTooShort(_) => msg::BOARD_SECRET_TOKEN_SHORT,
+        })
+    }
+}
+
 impl std::fmt::Display for SecretError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.localized(i18n::current()))

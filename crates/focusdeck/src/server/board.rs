@@ -1,8 +1,11 @@
 //! Server-side boxes: one plugin host per profile box, cached lists, plan links and error mapping.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::ops::{Deref, DerefMut};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::Context;
@@ -21,11 +24,11 @@ use crate::api::{
 use crate::capture;
 use crate::config::{CaptureWords, Config};
 use crate::host::PluginHost;
-use crate::i18n::{self, msg, t_args};
+use crate::i18n::{self, msg, t, t_args};
 use crate::links::closures_after_list;
 use crate::paths::Paths;
 use crate::profile::{self, BoxSpec, Profile};
-use crate::ui::run::build_host;
+use crate::ui::run::build_host_typed;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoardError {
@@ -47,7 +50,7 @@ impl BoardError {
 
     pub fn message(&self) -> String {
         match self {
-            BoardError::NotFound => "not found".to_owned(),
+            BoardError::NotFound => t(msg::BOARD_NOT_FOUND),
             BoardError::Invalid(m) | BoardError::Unsupported(m) | BoardError::Plugin(m) => {
                 m.clone()
             }
@@ -63,6 +66,9 @@ impl std::fmt::Display for BoardError {
 
 impl std::error::Error for BoardError {}
 
+/// Builds a box's host; the error text is safe to send to API clients.
+pub(crate) type Builder = Box<dyn Fn() -> Result<PluginHost, String> + Send + Sync>;
+
 #[derive(Default)]
 struct Cache {
     items: Option<Vec<Item>>,
@@ -75,18 +81,42 @@ struct Cache {
 
 struct BoxState {
     spec: BoxSpec,
-    host: Result<Mutex<PluginHost>, String>,
+    build: Builder,
+    host: Mutex<Option<PluginHost>>,
     describe: StdMutex<Option<Result<Describe, String>>>,
     cache: StdMutex<Cache>,
+    link_running: AtomicBool,
+}
+
+struct HostGuard<'a>(MutexGuard<'a, Option<PluginHost>>);
+
+impl Deref for HostGuard<'_> {
+    type Target = PluginHost;
+
+    fn deref(&self) -> &PluginHost {
+        self.0
+            .as_ref()
+            .expect("the host is built before the guard is handed out")
+    }
+}
+
+impl DerefMut for HostGuard<'_> {
+    fn deref_mut(&mut self) -> &mut PluginHost {
+        self.0
+            .as_mut()
+            .expect("the host is built before the guard is handed out")
+    }
 }
 
 impl BoxState {
-    fn new(spec: BoxSpec, host: Result<PluginHost, String>) -> BoxState {
+    fn new(spec: BoxSpec, build: Builder) -> BoxState {
         BoxState {
             spec,
-            host: host.map(Mutex::new),
+            build,
+            host: Mutex::new(None),
             describe: StdMutex::new(None),
             cache: StdMutex::new(Cache::default()),
+            link_running: AtomicBool::new(false),
         }
     }
 
@@ -105,13 +135,19 @@ impl BoxState {
         }
     }
 
-    /// Takes the box lock and makes sure the plugin answers describe, restarting it if it is down.
-    async fn ready(&self) -> Result<(MutexGuard<'_, PluginHost>, Describe), BoardError> {
-        let host = self
-            .host
-            .as_ref()
-            .map_err(|message| BoardError::Plugin(message.clone()))?;
-        let mut guard = host.lock().await;
+    /// Takes the box lock and makes sure the plugin answers describe, building and restarting it as needed.
+    async fn ready(&self) -> Result<(HostGuard<'_>, Describe), BoardError> {
+        let mut guard = self.host.lock().await;
+        if guard.is_none() {
+            match (self.build)() {
+                Ok(host) => *guard = Some(host),
+                Err(message) => {
+                    self.remember(Err(message.clone()));
+                    return Err(BoardError::Plugin(message));
+                }
+            }
+        }
+        let mut guard = HostGuard(guard);
         match guard.describe().await {
             Ok(describe) => {
                 self.remember(Ok(describe.clone()));
@@ -157,26 +193,39 @@ impl ProfileState {
     }
 }
 
-pub struct Board {
+struct Inner {
     profiles: BTreeMap<String, ProfileState>,
     words: CaptureWords,
     language: Option<String>,
     default_profile: Option<String>,
+    // tests await the background plan-link steps through these handles
+    #[cfg(test)]
+    links: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
-pub(crate) type BoxHosts = Vec<Result<PluginHost, String>>;
+pub struct Board(Arc<Inner>);
+
+/// Builds the real host of one box; failures are logged in full and reported without file names.
+pub(crate) fn host_builder(paths: Paths, home: PathBuf, spec: BoxSpec) -> Builder {
+    Box::new(move || {
+        build_host_typed(&paths, &home, &spec).map_err(|e| {
+            eprintln!("box {}: {e}", spec.id);
+            e.public()
+        })
+    })
+}
 
 impl Board {
     pub fn load(paths: &Paths, cfg: &Config, home: &Path) -> anyhow::Result<Board> {
         let dir = paths.config_dir.join("profiles");
-        let mut stems = Vec::new();
-        let entries = std::fs::read_dir(&dir).with_context(|| {
+        let no_profiles = || {
             t_args(
                 msg::SERVER_NO_PROFILES,
                 &[("dir", dir.display().to_string().as_str().into())],
             )
-        })?;
-        for entry in entries {
+        };
+        let mut stems = Vec::new();
+        for entry in std::fs::read_dir(&dir).with_context(no_profiles)? {
             let path = entry?.path();
             if path.extension().is_some_and(|ext| ext == "toml")
                 && path.is_file()
@@ -187,20 +236,17 @@ impl Board {
             }
         }
         if stems.is_empty() {
-            anyhow::bail!(t_args(
-                msg::SERVER_NO_PROFILES,
-                &[("dir", dir.display().to_string().as_str().into())]
-            ));
+            anyhow::bail!(no_profiles());
         }
         let mut loaded = Vec::new();
         for stem in stems {
             let profile = profile::load(&paths.profile_path(&stem))?;
-            let hosts = profile
+            let builders = profile
                 .boxes
                 .iter()
-                .map(|spec| build_host(paths, home, spec))
+                .map(|spec| host_builder(paths.clone(), home.to_path_buf(), spec.clone()))
                 .collect();
-            loaded.push((stem, profile, hosts));
+            loaded.push((stem, profile, builders));
         }
         Ok(Board::from_parts(
             loaded,
@@ -211,37 +257,133 @@ impl Board {
     }
 
     pub(crate) fn from_parts(
-        loaded: Vec<(String, Profile, BoxHosts)>,
+        loaded: Vec<(String, Profile, Vec<Builder>)>,
         words: CaptureWords,
         language: Option<String>,
         default_profile: Option<String>,
     ) -> Board {
         let profiles = loaded
             .into_iter()
-            .map(|(name, profile, hosts)| {
+            .map(|(name, profile, builders)| {
                 let boxes = profile
                     .boxes
                     .iter()
                     .cloned()
-                    .zip(hosts)
-                    .map(|(spec, host)| BoxState::new(spec, host))
+                    .zip(builders)
+                    .map(|(spec, build)| BoxState::new(spec, build))
                     .collect();
                 (name, ProfileState { profile, boxes })
             })
             .collect();
-        Board {
+        Board(Arc::new(Inner {
             profiles,
             words,
             language,
             default_profile,
+            #[cfg(test)]
+            links: StdMutex::new(Vec::new()),
+        }))
+    }
+
+    pub async fn profiles(&self) -> ProfilesResponse {
+        self.0.profiles_response()
+    }
+
+    pub async fn profile_view(&self, p: &str) -> Result<ProfileView, BoardError> {
+        self.0.profile_view(p).await
+    }
+
+    pub async fn items(
+        &self,
+        p: &str,
+        b: &str,
+        now: DateTime<FixedOffset>,
+    ) -> Result<ItemsResponse, BoardError> {
+        let state = self.0.profile(p)?;
+        let (idx, bx) = state.find(b)?;
+        let (response, real) = self.0.list_box(bx, now).await?;
+        if real {
+            self.spawn_link(p, idx, response.items.clone(), now);
+        }
+        Ok(response)
+    }
+
+    // runs after the source list is answered, so a slow target never delays it
+    fn spawn_link(&self, p: &str, idx: usize, items: Vec<Item>, now: DateTime<FixedOffset>) {
+        let source = &self.0.profiles[p].boxes[idx];
+        if source.spec.plan_into.is_none() || source.link_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let inner = Arc::clone(&self.0);
+        let p = p.to_owned();
+        let handle = tokio::spawn(async move {
+            inner.close_linked(&p, idx, &items, now).await;
+            inner.profiles[&p].boxes[idx]
+                .link_running
+                .store(false, Ordering::SeqCst);
+        });
+        #[cfg(test)]
+        self.0
+            .links
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(handle);
+        #[cfg(not(test))]
+        drop(handle);
+    }
+
+    #[cfg(test)]
+    async fn settle_links(&self) {
+        let handles: Vec<_> = std::mem::take(&mut *self.0.links.lock().unwrap());
+        for handle in handles {
+            handle.await.unwrap();
         }
     }
 
+    pub async fn action(
+        &self,
+        p: &str,
+        b: &str,
+        req: ActionRequest,
+    ) -> Result<ActionResponse, BoardError> {
+        let (_, bx) = self.0.profile(p)?.find(b)?;
+        self.0.run_action(bx, req).await
+    }
+
+    pub async fn drop(
+        &self,
+        p: &str,
+        b: &str,
+        req: DropRequest,
+    ) -> Result<DropResponse, BoardError> {
+        let (_, bx) = self.0.profile(p)?.find(b)?;
+        self.0.run_drop(bx, req).await
+    }
+
+    pub async fn capture(
+        &self,
+        p: &str,
+        req: CaptureRequest,
+    ) -> Result<CaptureResponse, BoardError> {
+        self.0.capture(p, req).await
+    }
+
+    /// A box that fails is skipped; only when every box that was asked fails does the call answer `Plugin`.
+    pub async fn reminders(
+        &self,
+        p: &str,
+        since: DateTime<FixedOffset>,
+    ) -> Result<RemindersResponse, BoardError> {
+        self.0.reminders(p, since).await
+    }
+}
+
+impl Inner {
     fn profile(&self, p: &str) -> Result<&ProfileState, BoardError> {
         self.profiles.get(p).ok_or(BoardError::NotFound)
     }
 
-    pub async fn profiles(&self) -> ProfilesResponse {
+    fn profiles_response(&self) -> ProfilesResponse {
         let default = self
             .default_profile
             .as_ref()
@@ -258,7 +400,7 @@ impl Board {
         }
     }
 
-    pub async fn profile_view(&self, p: &str) -> Result<ProfileView, BoardError> {
+    async fn profile_view(&self, p: &str) -> Result<ProfileView, BoardError> {
         let state = self.profile(p)?;
         let describes = futures_util::future::join_all(state.boxes.iter().map(|bx| async move {
             match bx.known_describe() {
@@ -272,21 +414,6 @@ impl Board {
             &self.words,
             describes,
         ))
-    }
-
-    pub async fn items(
-        &self,
-        p: &str,
-        b: &str,
-        now: DateTime<FixedOffset>,
-    ) -> Result<ItemsResponse, BoardError> {
-        let state = self.profile(p)?;
-        let (idx, bx) = state.find(b)?;
-        let (response, real) = self.list_box(bx, now).await?;
-        if real {
-            self.close_linked(state, idx, &response.items, now).await;
-        }
-        Ok(response)
     }
 
     /// The flag tells a real plugin list from a cached one.
@@ -332,13 +459,8 @@ impl Board {
     }
 
     // a failure here leaves the links open; the next real list retries them
-    async fn close_linked(
-        &self,
-        state: &ProfileState,
-        idx: usize,
-        items: &[Item],
-        now: DateTime<FixedOffset>,
-    ) {
+    async fn close_linked(&self, p: &str, idx: usize, items: &[Item], now: DateTime<FixedOffset>) {
+        let state = &self.profiles[p];
         let source = &state.boxes[idx];
         let Some(target) = source
             .spec
@@ -367,18 +489,10 @@ impl Board {
                 action: "done".to_owned(),
                 args: json!({}),
             };
-            let _ = self.run_action(target, request).await;
+            if let Err(e) = self.run_action(target, request).await {
+                eprintln!("plan link into {}: {e}", target.spec.id);
+            }
         }
-    }
-
-    pub async fn action(
-        &self,
-        p: &str,
-        b: &str,
-        req: ActionRequest,
-    ) -> Result<ActionResponse, BoardError> {
-        let (_, bx) = self.profile(p)?.find(b)?;
-        self.run_action(bx, req).await
     }
 
     async fn run_action(
@@ -388,9 +502,12 @@ impl Board {
     ) -> Result<ActionResponse, BoardError> {
         let (mut host, describe) = bx.ready().await?;
         if !describe.actions.contains(&req.action) {
-            return Err(BoardError::Unsupported(format!(
-                "box {} does not support the action {}",
-                bx.spec.id, req.action
+            return Err(BoardError::Unsupported(t_args(
+                msg::BOARD_UNSUPPORTED_ACTION,
+                &[
+                    ("box", bx.spec.id.as_str().into()),
+                    ("action", req.action.as_str().into()),
+                ],
             )));
         }
         let params = ActionParams {
@@ -405,22 +522,12 @@ impl Board {
         Ok(ActionResponse { item })
     }
 
-    pub async fn drop(
-        &self,
-        p: &str,
-        b: &str,
-        req: DropRequest,
-    ) -> Result<DropResponse, BoardError> {
-        let (_, bx) = self.profile(p)?.find(b)?;
-        self.run_drop(bx, req).await
-    }
-
     async fn run_drop(&self, bx: &BoxState, req: DropRequest) -> Result<DropResponse, BoardError> {
         let (mut host, describe) = bx.ready().await?;
         if !describe.accepts_drop {
-            return Err(BoardError::Unsupported(format!(
-                "box {} does not accept drops",
-                bx.spec.id
+            return Err(BoardError::Unsupported(t_args(
+                msg::BOARD_NO_DROPS,
+                &[("box", bx.spec.id.as_str().into())],
             )));
         }
         let from_plugin = req.from.as_ref().map(|s| s.plugin.clone());
@@ -433,18 +540,14 @@ impl Board {
         Ok(DropResponse { item })
     }
 
-    pub async fn capture(
-        &self,
-        p: &str,
-        req: CaptureRequest,
-    ) -> Result<CaptureResponse, BoardError> {
+    async fn capture(&self, p: &str, req: CaptureRequest) -> Result<CaptureResponse, BoardError> {
         let state = self.profile(p)?;
         let (target_id, bx) = state
             .profile
             .capture_into
             .as_deref()
             .and_then(|id| state.find(id).ok().map(|(_, bx)| (id, bx)))
-            .ok_or_else(|| BoardError::Invalid("the profile has no capture_into box".to_owned()))?;
+            .ok_or_else(|| BoardError::Invalid(t(msg::BOARD_NO_CAPTURE_INTO)))?;
         let localizer = i18n::localizer(req.lang.as_deref().or(self.language.as_deref()));
         let words = capture::Words::new(&localizer, &self.words);
         let parsed = capture::parse(
@@ -466,8 +569,7 @@ impl Board {
         })
     }
 
-    /// A box that fails is skipped; only when every box that was asked fails does the call answer `Plugin`.
-    pub async fn reminders(
+    async fn reminders(
         &self,
         p: &str,
         since: DateTime<FixedOffset>,
@@ -532,6 +634,7 @@ mod tests {
     use focusdeck_protocol::Source;
     use std::path::PathBuf;
     use std::process::Command;
+    use std::sync::atomic::Ordering;
     use std::sync::{Arc, LazyLock};
     use std::time::Duration;
 
@@ -644,11 +747,27 @@ mod tests {
         }
     }
 
+    type BoxHosts = Vec<Result<PluginHost, String>>;
+
+    fn once(host: Result<PluginHost, String>) -> Builder {
+        let cell = StdMutex::new(Some(host));
+        Box::new(move || {
+            cell.lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(|| Err("host already taken".into()))
+        })
+    }
+
+    fn builders(hosts: BoxHosts) -> Vec<Builder> {
+        hosts.into_iter().map(once).collect()
+    }
+
     fn board(entries: Vec<(&str, Profile, BoxHosts)>) -> Board {
         Board::from_parts(
             entries
                 .into_iter()
-                .map(|(name, p, hosts)| (name.to_owned(), p, hosts))
+                .map(|(name, p, hosts)| (name.to_owned(), p, builders(hosts)))
                 .collect(),
             CaptureWords::default(),
             Some("en".into()),
@@ -786,21 +905,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broken_box_reports_error_in_profile_and_retries_describe() {
+    async fn broken_box_reports_error_in_profile() {
         let env = Env::new("ok");
         let p = profile(
             "p",
             vec![spec("a", "fake", LONG, None), spec("b", "gone", LONG, None)],
             None,
         );
-        let board = board(vec![(
-            "p",
-            p,
-            vec![
-                Ok(env.host("a")),
-                Err("plugin gone is not installed".into()),
-            ],
-        )]);
+        let gone: Builder = Box::new(|| Err("plugin gone is not installed".into()));
+        let board = Board::from_parts(
+            vec![("p".into(), p, vec![once(Ok(env.host("a"))), gone])],
+            CaptureWords::default(),
+            None,
+            None,
+        );
         let view = board.profile_view("p").await.unwrap();
         assert!(view.boxes[0].describe.is_some() && view.boxes[0].error.is_none());
         assert!(view.boxes[1].describe.is_none());
@@ -813,6 +931,79 @@ mod tests {
             err,
             BoardError::Plugin("plugin gone is not installed".into())
         );
+    }
+
+    #[tokio::test]
+    async fn box_whose_host_failed_to_build_recovers_without_restart() {
+        let env = Env::new("ok");
+        let p = profile("p", vec![spec("a", "fake", LONG, None)], None);
+        let host = StdMutex::new(Some(env.host("a")));
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let flaky: Builder = Box::new(move || {
+            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err("plugin fake is not installed".into());
+            }
+            Ok(host.lock().unwrap().take().unwrap())
+        });
+        let board = Board::from_parts(
+            vec![("p".into(), p, vec![flaky])],
+            CaptureWords::default(),
+            None,
+            None,
+        );
+        assert_eq!(
+            board.items("p", "a", now()).await.unwrap_err().code(),
+            ErrorCode::Plugin
+        );
+        assert_eq!(board.items("p", "a", now()).await.unwrap().items.len(), 2);
+        let view = board.profile_view("p").await.unwrap();
+        assert!(view.boxes[0].error.is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_describe_is_retried_by_the_next_request() {
+        let env = Env::new("oldproto");
+        let p = profile("p", vec![spec("a", "fake", LONG, None)], None);
+        let board = board(vec![("p", p, vec![Ok(env.host("a"))])]);
+        let view = board.profile_view("p").await.unwrap();
+        assert!(view.boxes[0].error.is_some());
+        assert!(board.items("p", "a", now()).await.is_err());
+        env.set_mode("ok");
+        assert_eq!(board.items("p", "a", now()).await.unwrap().items.len(), 2);
+        assert!(
+            board.profile_view("p").await.unwrap().boxes[0]
+                .error
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn secret_file_path_never_reaches_api_errors() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            config_dir: home.path().join("config"),
+            data_dir: home.path().join("data"),
+            state_dir: home.path().join("state"),
+        };
+        let mut spec = spec("a", "local", LONG, None);
+        spec.config = "token_file = \"~/nokey-file\"".parse().unwrap();
+        let p = profile("p", vec![spec.clone()], None);
+        let builder = host_builder(paths, home.path().to_path_buf(), spec);
+        let board = Board::from_parts(
+            vec![("p".into(), p, vec![builder])],
+            CaptureWords::default(),
+            None,
+            None,
+        );
+        let view = board.profile_view("p").await.unwrap();
+        let shown = view.boxes[0].error.clone().unwrap();
+        let listed = board.items("p", "a", now()).await.unwrap_err().message();
+        for text in [shown, listed] {
+            let home = home.path().to_string_lossy();
+            assert!(!text.contains(home.as_ref()), "{text}");
+            assert!(!text.contains("nokey-file"), "{text}");
+            assert!(text.contains("secret file"), "{text}");
+        }
     }
 
     #[tokio::test]
@@ -834,8 +1025,10 @@ mod tests {
             vec![Ok(source.host("from")), Ok(target.host("to"))],
         )]);
         board.items("p", "from", now()).await.unwrap();
+        board.settle_links().await;
         assert_eq!(target.count("action"), 0);
         board.items("p", "from", now()).await.unwrap();
+        board.settle_links().await;
         assert_eq!(
             target
                 .log()
@@ -868,8 +1061,31 @@ mod tests {
         for _ in 0..3 {
             board.items("p", "from", now()).await.unwrap();
         }
+        board.settle_links().await;
         assert_eq!(source.count("list"), 1);
         assert_eq!(target.count("action"), 0);
+    }
+
+    #[tokio::test]
+    async fn hung_link_target_does_not_delay_source_list() {
+        let source = Env::new("ok");
+        let target = Env::new("hang");
+        let p = profile(
+            "p",
+            vec![
+                spec("from", "src", Duration::ZERO, Some("to")),
+                spec("to", "tgt", LONG, None),
+            ],
+            None,
+        );
+        let hanging = target.host("to").with_timeout(Duration::from_millis(1500));
+        let board = board(vec![("p", p, vec![Ok(source.host("from")), Ok(hanging)])]);
+        let started = Instant::now();
+        let listed = board.items("p", "from", now()).await.unwrap();
+        assert_eq!(listed.items.len(), 2);
+        assert!(started.elapsed() < Duration::from_millis(1000));
+        board.settle_links().await;
+        assert!(started.elapsed() >= Duration::from_millis(1500));
     }
 
     #[tokio::test]
@@ -877,7 +1093,6 @@ mod tests {
         let env = Env::new("slow-action");
         let p = profile("p", vec![spec("a", "fake", LONG, None)], None);
         let board = Arc::new(board(vec![("p", p, vec![Ok(env.host("a"))])]));
-        let started = Instant::now();
         let tasks: Vec<_> = ["1", "2", "3"]
             .into_iter()
             .map(|id| {
@@ -888,10 +1103,9 @@ mod tests {
         for task in tasks {
             task.await.unwrap().unwrap();
         }
-        assert!(started.elapsed() >= Duration::from_millis(900));
         let log = env.log();
-        let marks: Vec<&str> = log.lines().filter(|l| l.starts_with("action-")).collect();
-        assert_eq!(marks, ["action-start", "action-end"].repeat(3), "{log}");
+        assert!(!log.contains("overlap"), "{log}");
+        assert_eq!(env.count("action "), 3, "{log}");
     }
 
     #[tokio::test]
@@ -963,8 +1177,8 @@ mod tests {
         assert_eq!(single.profiles().await.default.as_deref(), Some("p"));
         let two = Board::from_parts(
             vec![
-                ("p".into(), one(), vec![Ok(env.host("a"))]),
-                ("q".into(), one(), vec![Ok(env.host("a"))]),
+                ("p".into(), one(), builders(vec![Ok(env.host("a"))])),
+                ("q".into(), one(), builders(vec![Ok(env.host("a"))])),
             ],
             CaptureWords::default(),
             None,
