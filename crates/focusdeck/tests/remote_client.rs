@@ -404,13 +404,11 @@ fn a_server_fault_on_the_first_note_keeps_every_note_in_order() {
 }
 
 #[test]
-fn profile_without_capture_into_leaves_the_backlog_untouched() {
+fn profile_without_capture_into_keeps_every_note_queued() {
     let mut server = Server::new();
     let env = Env::new(&server.url());
     let _p = profiles_without_capture_into(&mut server);
     env.queue().push_entry(&seeded("a", 0)).unwrap();
-    let path = env.state_dir().join("capture-queue.jsonl");
-    let before = std::fs::read_to_string(&path).unwrap();
     let never = refuse(&mut server, "a", 422, INVALID, 0);
     let out = env.run(&["capture", "yeni"]);
     assert_eq!(code(&out), 1);
@@ -420,8 +418,15 @@ fn profile_without_capture_into_leaves_the_backlog_untouched() {
         "{}",
         text(&out.stderr)
     );
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
-    assert_eq!(env.queued(), vec![seeded("a", 0)]);
+    let queued = env.queued();
+    let texts: Vec<_> = queued.iter().map(|q| q.text.as_str()).collect();
+    assert_eq!(texts, ["a", "yeni"]);
+    assert_eq!(queued[0], seeded("a", 0));
+    let log = env.notifications();
+    assert!(
+        log.contains("focusdeck: queued\tyeni\n") && log.contains("no capture_into"),
+        "{log}"
+    );
 }
 
 #[test]

@@ -254,12 +254,7 @@ pub async fn run_remote(
             why: e.to_string(),
         },
         // the server maps a missing capture_into to INVALID, which would wipe the backlog
-        Some(Ok((_, _, None))) => {
-            if let Some(i) = progress.own {
-                progress.pending.remove(i);
-            }
-            RemoteOutcome::NoCaptureInto
-        }
+        Some(Ok((_, _, None))) => RemoteOutcome::NoCaptureInto,
         Some(Ok((client, profile, Some(_)))) => tokio::select! {
             () = deliver_remote(&client, &profile, &mut progress, &log) => RemoteOutcome::Done,
             () = stop.wait() => RemoteOutcome::Interrupted,
@@ -298,7 +293,13 @@ pub async fn run_remote(
             1
         }
         RemoteOutcome::NoCaptureInto => {
-            eprintln!("{}", t(msg::CAPTURE_NO_CAPTURE_INTO));
+            let why = t(msg::CAPTURE_NO_CAPTURE_INTO);
+            notify::log_line(&log, &why);
+            eprintln!("{why}");
+            if !failed {
+                let body = format!("{note}\n{why}");
+                notify::send_logged(&log, &t(msg::CAPTURE_QUEUED_TITLE), &body, true);
+            }
             1
         }
         RemoteOutcome::Done => {
