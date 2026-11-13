@@ -205,3 +205,4 @@ local-unknown-action = bilinmeyen eylem: { $action }
 
 starter-title = Notlar
 starter-tmp-left = geçici dosya silinemedi { $path }: { $error }
+server-no-profiles = { $dir } içinde profil bulunamadı

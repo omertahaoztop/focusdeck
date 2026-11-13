@@ -209,3 +209,4 @@ local-unknown-action = unknown action: { $action }
 
 starter-title = Notes
 starter-tmp-left = could not remove temporary file { $path }: { $error }
+server-no-profiles = no profiles found in { $dir }

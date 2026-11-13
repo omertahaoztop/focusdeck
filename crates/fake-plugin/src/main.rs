@@ -1,4 +1,4 @@
-//! Test plugin driven by FAKE_MODE_FILE or FAKE_MODE (raw-* modes break the protocol); writes FAKE_LOG, FAKE_LANG_LOG, FAKE_START_LOG, FAKE_PID_LOG; reminders from FAKE_REMINDERS_FILE.
+//! Test plugin driven by FAKE_MODE_FILE or FAKE_MODE (raw-* modes break the protocol); writes FAKE_LOG, FAKE_LANG_LOG, FAKE_START_LOG, FAKE_PID_LOG; reminders from FAKE_REMINDERS_FILE, list items from FAKE_ITEMS_FILE.
 
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, Write};
@@ -19,6 +19,14 @@ fn mode() -> String {
         return text.trim().to_string();
     }
     std::env::var("FAKE_MODE").unwrap_or_else(|_| "ok".into())
+}
+
+fn log_line(line: &str) {
+    if let Ok(path) = std::env::var("FAKE_LOG")
+        && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
 }
 
 fn item(id: &str, title: &str) -> Item {
@@ -66,7 +74,14 @@ impl Plugin for Fake {
     }
 
     fn list(&mut self, _p: ListParams) -> Result<Vec<Item>, String> {
+        log_line("list");
         match mode().as_str() {
+            "empty" => Ok(vec![]),
+            _ if std::env::var_os("FAKE_ITEMS_FILE").is_some() => {
+                let path = std::env::var("FAKE_ITEMS_FILE").unwrap_or_default();
+                let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                serde_json::from_str(&text).map_err(|e| e.to_string())
+            }
             "hang" => {
                 std::thread::sleep(Duration::from_secs(60));
                 Ok(vec![])
@@ -86,7 +101,13 @@ impl Plugin for Fake {
         }
     }
 
-    fn action(&mut self, _p: ActionParams) -> Result<Option<Item>, String> {
+    fn action(&mut self, p: ActionParams) -> Result<Option<Item>, String> {
+        if mode() == "slow-action" {
+            log_line("action-start");
+            std::thread::sleep(Duration::from_millis(300));
+            log_line("action-end");
+        }
+        log_line(&format!("action {} {}", p.item, p.action));
         Ok(None)
     }
 
