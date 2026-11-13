@@ -237,4 +237,4 @@ remote-unsupported-call = sunucudaki kutu { $method } işlemini yapamaz
 remote-box-missing = { $profile } sunucu profilinde { $box } kutusu yok
 remote-describe-unavailable = sunucu bu kutuyu tanımlayamadı
 remote-profile-unknown = { $address } sunucusunda { $name } profili yok
-remote-too-large = yanıt 16 MiB'den büyük
+remote-too-large = yanıt 16 MiB'tan büyük
