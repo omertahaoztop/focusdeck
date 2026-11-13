@@ -14,6 +14,29 @@ pub struct Queued {
     pub at: DateTime<FixedOffset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+impl Queued {
+    pub fn new(text: String, at: DateTime<FixedOffset>, lang: Option<String>) -> Queued {
+        Queued {
+            text,
+            at,
+            lang,
+            id: Some(crate::fsio::unique_id()),
+        }
+    }
+
+    /// Old lines carry no id and are never rewritten with one, so the derived key stays the same on every read.
+    pub fn key(&self) -> String {
+        match &self.id {
+            Some(id) => id.clone(),
+            None => crate::install::sha256_hex(
+                format!("{}\n{}", self.at.to_rfc3339(), self.text).as_bytes(),
+            ),
+        }
+    }
 }
 
 pub struct Queue {
@@ -37,6 +60,7 @@ impl Queue {
             text: text.to_owned(),
             at,
             lang: None,
+            id: None,
         })
     }
 
@@ -200,6 +224,7 @@ mod tests {
             text: text.into(),
             at: at("2026-11-12T10:00:00+03:00"),
             lang: None,
+            id: None,
         }
     }
 
@@ -246,6 +271,7 @@ mod tests {
                     text: "iki".into(),
                     at: at("2026-11-12T10:01:00+03:00"),
                     lang: None,
+                    id: None,
                 },
             ]
         );
@@ -289,6 +315,7 @@ mod tests {
             text: "b".into(),
             at: at("2026-11-12T10:00:00+03:00"),
             lang: Some("tr".into()),
+            id: None,
         };
         q.push_entry(&tr).unwrap();
         let raw = fs::read_to_string(dir.path().join(FILE)).unwrap();
@@ -457,5 +484,28 @@ mod tests {
         let mut want: Vec<String> = (0..50).map(|i| format!("n{i}")).collect();
         want.sort();
         assert_eq!(all, want);
+    }
+
+    #[test]
+    fn old_queue_line_without_id_parses_and_keeps_key() {
+        let (dir, q) = queue();
+        let old = "{\"text\":\"eski\",\"at\":\"2026-11-12T10:00:00.123456789+03:00\"}\n";
+        fs::write(dir.path().join(FILE), old).unwrap();
+        let first = q.take().unwrap();
+        assert_eq!(first.items[0].id, None);
+        let key = first.items[0].key();
+        assert_eq!(key.len(), 64);
+        let unsent = first.items.clone();
+        q.commit(first, &unsent).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join(FILE)).unwrap(), old);
+        let second = q.take().unwrap();
+        assert_eq!(second.items[0].key(), key);
+
+        let fresh = Queued::new("yeni".into(), at("2026-11-12T10:00:00+03:00"), None);
+        let id = fresh.id.clone().unwrap();
+        assert!(!id.is_empty() && id.len() <= 255);
+        assert_eq!(fresh.key(), id);
+        q.push_entry(&fresh).unwrap();
+        assert_eq!(drain(&q).last().unwrap().key(), id);
     }
 }

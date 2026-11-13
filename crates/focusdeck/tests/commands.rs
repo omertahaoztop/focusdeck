@@ -451,6 +451,7 @@ fn queued_note_parses_in_its_own_language() {
             text: "ara yarın 10:00".into(),
             at: at("2026-11-11T10:00:00+03:00"),
             lang: Some("tr".into()),
+            id: None,
         })
         .unwrap();
     let ran = env.run(&["capture", "yeni"]);
@@ -488,6 +489,7 @@ fn unparsable_queued_note_is_not_counted_as_sent() {
             text: text.into(),
             at: at(when),
             lang: Some("en".into()),
+            id: None,
         })
         .unwrap();
     }

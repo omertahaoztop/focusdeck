@@ -216,6 +216,11 @@ impl RemoteClient {
         explain_error(&self.address, e)
     }
 
+    /// Like `explain`, but a server-sent message also names the server.
+    pub fn explain_naming_server(&self, e: &RemoteError) -> String {
+        startup_text(&self.address, e)
+    }
+
     fn endpoint(&self, segments: &[&str]) -> Url {
         let mut url = self.base.clone();
         url.set_query(None);
@@ -355,6 +360,21 @@ pub async fn resolve_profile(
     Ok(name)
 }
 
+/// Connects and picks the profile; the errors name the server and never the token.
+pub async fn connect_profile(
+    server: &ServerConfig,
+    home: &Path,
+    cli: Option<&str>,
+    env: Option<&str>,
+    cfg: &Config,
+) -> anyhow::Result<(Arc<RemoteClient>, String)> {
+    let client = RemoteClient::connect(server, home)
+        .map_err(|e| anyhow::anyhow!(startup_text(&public_address(&server.url), &e)))?;
+    let client = Arc::new(client);
+    let name = resolve_profile(&client, cli, env, cfg).await?;
+    Ok((client, name))
+}
+
 /// Connects and loads the chosen profile (its server key and view); any failure here keeps the TUI from opening.
 pub async fn open(
     server: &ServerConfig,
@@ -363,10 +383,7 @@ pub async fn open(
     env: Option<&str>,
     cfg: &Config,
 ) -> anyhow::Result<(Arc<RemoteClient>, String, ProfileView)> {
-    let client = RemoteClient::connect(server, home)
-        .map_err(|e| anyhow::anyhow!(startup_text(&public_address(&server.url), &e)))?;
-    let client = Arc::new(client);
-    let name = resolve_profile(&client, cli, env, cfg).await?;
+    let (client, name) = connect_profile(server, home, cli, env, cfg).await?;
     let view = client
         .profile(&name)
         .await

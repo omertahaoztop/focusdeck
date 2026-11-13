@@ -89,16 +89,62 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Capture { text }) => {
-            let (paths, config, profile) = load_profile(cli.profile.as_deref())?;
+            let (paths, config) = load_base()?;
             let text = (!text.is_empty()).then(|| text.join(" "));
             let now = chrono::Local::now().fixed_offset();
-            let code = capture_cmd::run(&paths, &config, &profile, text, now).await?;
+            let env_profile = std::env::var("FOCUSDECK_PROFILE").ok();
+            let code = match &config.server {
+                Some(server) => {
+                    capture_cmd::run_remote(
+                        &paths,
+                        &config,
+                        server,
+                        cli.profile.as_deref(),
+                        env_profile.as_deref(),
+                        text,
+                        now,
+                    )
+                    .await?
+                }
+                None => {
+                    let profile = local_profile(
+                        &paths,
+                        cli.profile.as_deref(),
+                        env_profile.as_deref(),
+                        &config,
+                    )?;
+                    capture_cmd::run(&paths, &config, &profile, text, now).await?
+                }
+            };
             Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
         }
         Some(Command::Remind { send }) => {
-            let (paths, _, profile) = load_profile(cli.profile.as_deref())?;
+            let (paths, config) = load_base()?;
             let now = chrono::Local::now().fixed_offset();
-            remind::run(&paths, &profile, send, now).await?;
+            let env_profile = std::env::var("FOCUSDECK_PROFILE").ok();
+            match &config.server {
+                Some(server) => {
+                    let home = dirs::home_dir().unwrap_or_default();
+                    let (client, name) = focusdeck::remote::connect_profile(
+                        server,
+                        &home,
+                        cli.profile.as_deref(),
+                        env_profile.as_deref(),
+                        &config,
+                    )
+                    .await?;
+                    remind::run_remote(&paths, &client, &name, send, now).await?;
+                }
+                None => {
+                    let profile = local_profile(
+                        &paths,
+                        cli.profile.as_deref(),
+                        env_profile.as_deref(),
+                        &config,
+                    )?;
+                    remind::run(&paths, &profile, send, now).await?;
+                }
+            }
             Ok(ExitCode::SUCCESS)
         }
         None => {
@@ -131,12 +177,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     }
 }
 
-fn load_profile(flag: Option<&str>) -> anyhow::Result<(Paths, Config, Profile)> {
+fn load_base() -> anyhow::Result<(Paths, Config)> {
     let paths = Paths::from_env().map_err(anyhow::Error::msg)?;
     let config = Config::load(&paths)?;
-    let env_profile = std::env::var("FOCUSDECK_PROFILE").ok();
-    let profile = local_profile(&paths, flag, env_profile.as_deref(), &config)?;
-    Ok((paths, config, profile))
+    Ok((paths, config))
 }
 
 fn local_profile(
