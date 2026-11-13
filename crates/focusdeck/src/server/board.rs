@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use chrono::{DateTime, FixedOffset};
@@ -164,7 +164,9 @@ impl BoxState {
     fn fresh(&self) -> Option<ItemsResponse> {
         let cache = self.cache();
         let fetched = cache.fetched?;
-        if fetched.elapsed() >= self.spec.refresh {
+        // the slack keeps a client polling at `refresh` from landing on the cache
+        let slack = (self.spec.refresh / 10).min(Duration::from_secs(2));
+        if fetched.elapsed() >= self.spec.refresh.saturating_sub(slack) {
             return None;
         }
         Some(ItemsResponse {
@@ -431,6 +433,7 @@ impl Inner {
             return Ok((cached, false));
         }
         let generation = bx.cache().generation;
+        let started = Instant::now();
         let listed = host
             .call::<_, ListResult>("list", &ListParams { view: View::Full })
             .await;
@@ -445,7 +448,7 @@ impl Inner {
                 if cache.generation == generation {
                     cache.items = Some(list.items.clone());
                     cache.listed_at = Some(now);
-                    cache.fetched = Some(Instant::now());
+                    cache.fetched = Some(started);
                 }
                 Ok((
                     ItemsResponse {
@@ -824,6 +827,49 @@ mod tests {
         assert_eq!(first.items.len(), 2);
         assert_eq!(first, second);
         assert_eq!(env.count("list"), 1);
+    }
+
+    #[tokio::test]
+    async fn poll_one_refresh_apart_reaches_the_plugin_but_half_a_refresh_does_not() {
+        let env = Env::new("slow-list");
+        let refresh = Duration::from_secs(1);
+        let p = profile("p", vec![spec("a", "fake", refresh, None)], None);
+        let board = board(vec![("p", p, vec![Ok(env.host("a"))])]);
+        let t0 = Instant::now();
+        board.items("p", "a", now()).await.unwrap();
+        tokio::time::sleep_until((t0 + refresh / 2).into()).await;
+        board.items("p", "a", now()).await.unwrap();
+        assert_eq!(env.count("list"), 1);
+        tokio::time::sleep_until((t0 + refresh).into()).await;
+        board.items("p", "a", now()).await.unwrap();
+        assert_eq!(env.count("list"), 2);
+    }
+
+    #[tokio::test]
+    async fn list_overtaken_by_an_action_does_not_refill_the_cache() {
+        let slow = Env::new("slow-list");
+        let other = Env::new("ok");
+        let p = profile(
+            "p",
+            vec![spec("a", "fake", LONG, None), spec("b", "fake", LONG, None)],
+            None,
+        );
+        let board = Arc::new(board(vec![(
+            "p",
+            p,
+            vec![Ok(slow.host("a")), Ok(other.host("b"))],
+        )]));
+        let listing = {
+            let board = Arc::clone(&board);
+            tokio::spawn(async move { board.items("p", "a", now()).await })
+        };
+        while slow.count("list") == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        board.action("p", "b", done("1")).await.unwrap();
+        listing.await.unwrap().unwrap();
+        board.items("p", "a", now()).await.unwrap();
+        assert_eq!(slow.count("list"), 2);
     }
 
     #[tokio::test]

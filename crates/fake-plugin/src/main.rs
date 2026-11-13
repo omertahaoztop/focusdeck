@@ -132,6 +132,10 @@ impl Plugin for Fake {
                 let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
                 serde_json::from_str(&text).map_err(|e| e.to_string())
             }
+            "slow-list" => {
+                std::thread::sleep(Duration::from_millis(400));
+                Ok(vec![item("1", "birinci"), item("2", "ikinci")])
+            }
             "hang" => {
                 std::thread::sleep(Duration::from_secs(60));
                 Ok(vec![])
