@@ -45,7 +45,7 @@ seenboard plugin remove vikunja
 `seenboard plugin list` çıktısı:
 
 ```
-vikunja  0.2.0  (dizinde: 0.2.0)
+vikunja  0.3.0  (dizinde: 0.3.0)
 local  (yerleşik)
 ```
 
@@ -288,7 +288,7 @@ Hata aşağıdaki durum koduyla ve `{"error": {"code": "...", "message": "..."}}
 
 ## Plugin protokolü
 
-Plugin, çekirdeğin her kutu için bir kez başlatıp açık tuttuğu bir programdır. Satır başına bir JSON mesaj: stdin'den istek, stdout'tan cevap. stderr çekirdeğin log dosyasına yazılır. Protokol sürümü 1.
+Plugin, çekirdeğin her kutu için bir kez başlatıp açık tuttuğu bir programdır. Satır başına bir JSON mesaj: stdin'den istek, stdout'tan cevap. stderr çekirdeğin log dosyasına yazılır. Protokol sürümü 2.
 
 ```json
 {"id": 7, "method": "list", "params": {"view": "full"}}

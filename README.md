@@ -288,7 +288,7 @@ An error has the status below and the body `{"error": {"code": "...", "message":
 
 ## Plugin protocol
 
-A plugin is a program the core starts once per box and keeps running. One JSON message per line: requests on stdin, responses on stdout. stderr goes to the core's log file. Protocol version 1.
+A plugin is a program the core starts once per box and keeps running. One JSON message per line: requests on stdin, responses on stdout. stderr goes to the core's log file. Protocol version 2.
 
 ```json
 {"id": 7, "method": "list", "params": {"view": "full"}}

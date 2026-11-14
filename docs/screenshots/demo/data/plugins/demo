@@ -114,7 +114,7 @@ for line in sys.stdin:
     req = json.loads(line)
     method, params = req["method"], req.get("params") or {}
     if method == "describe":
-        res = {"name": "demo", "version": "0.2.0", "protocol": 1,
+        res = {"name": "demo", "version": "0.2.0", "protocol": 2,
                "actions": ["done", "delete", "move", "reorder", "unstar"],
                "accepts_drop": True, "reminders": False}
     elif method == "configure":
