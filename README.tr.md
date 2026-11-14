@@ -338,9 +338,9 @@ MIT, bkz. [LICENSE](LICENSE).
 Seenboard, 0.5.0 öncesinde focusdeck adını taşıyordu. Eski ad altında hiçbir şey okunmaz: `focusdeck` dizini de `FOCUSDECK_*` değişkenleri de yok sayılır. Protokol 2, protokol 1'in yerini aldığından plugin'ler yeniden kurulmalıdır.
 
 ```sh
-mv ~/.config/focusdeck ~/.config/seenboard
-mv ~/.local/share/focusdeck ~/.local/share/seenboard
-mv ~/.local/state/focusdeck ~/.local/state/seenboard
+mv -T ~/.config/focusdeck ~/.config/seenboard
+mv -T ~/.local/share/focusdeck ~/.local/share/seenboard
+mv -T ~/.local/state/focusdeck ~/.local/state/seenboard
 ```
 
-Sonra profillerdeki ve `config.toml` içindeki yolları düzelt: `~/.config/focusdeck/secrets/` altını gösteren `token_file` ve `key_file` girdileri artık `~/.config/seenboard/secrets/` altını gösterir. Kabuğundaki, timer'daki ve pencere yöneticisi ayarındaki `FOCUSDECK_*` değişkenlerini `SEENBOARD_*` yap. Her plugin'i `seenboard plugin install <ad>` ile yeniden kur.
+Bunları `seenboard` ilk kez başlamadan önce çalıştır, yoksa yeni adla boş dizinler oluşur. Sonra profillerdeki ve `config.toml` içindeki yolları düzelt: `~/.config/focusdeck/secrets/` altını gösteren `token_file` ve `key_file` girdileri artık `~/.config/seenboard/secrets/` altını gösterir. Kabuğundaki, timer'daki ve pencere yöneticisi ayarındaki `FOCUSDECK_*` değişkenlerini `SEENBOARD_*` yap. Her plugin'i `seenboard plugin install <ad>` ile yeniden kur.

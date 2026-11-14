@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fake seenboard plugin that serves made-up items for README screenshots."""
+"""Fake Seenboard plugin that serves made-up items for README screenshots."""
 import json
 import os
 import sys

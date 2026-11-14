@@ -136,7 +136,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Config::load(&paths(dir.path())).unwrap();
         assert_eq!(cfg.default_profile, None);
-        assert_eq!(cfg.registries, vec![DEFAULT_REGISTRY.to_string()]);
+        assert_eq!(
+            cfg.registries,
+            vec![
+                "https://raw.githubusercontent.com/omertahaoztop/seenboard-plugins/main/index.toml"
+                    .to_string()
+            ]
+        );
         assert_eq!(cfg.capture_command, None);
     }
 

@@ -370,7 +370,7 @@ fn create_starter_with(
     }
     match published {
         Ok(()) => {}
-        // another seenboard published a complete file first
+        // another Seenboard published a complete file first
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_file() => {}
         Err(e) => return Err(create_error(e)),
     }

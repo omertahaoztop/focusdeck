@@ -60,7 +60,7 @@ pub fn current_target() -> &'static str {
 }
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-compile_error!("seenboard builds only for x86_64 and aarch64 Linux");
+compile_error!("Seenboard builds only for x86_64 and aarch64 Linux");
 
 /// Ad hem dosya yoluna hem manifest adına girdiği için düz dosya adı olmalı.
 pub fn validate_name(name: &str) -> anyhow::Result<()> {

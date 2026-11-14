@@ -31,7 +31,7 @@ seenboard plugin remove vikunja
 Output of `seenboard plugin list`:
 
 ```
-vikunja  0.2.0  (in registry: 0.2.0)
+vikunja  0.3.0  (in registry: 0.3.0)
 local  (built-in)
 ```
 
@@ -338,9 +338,9 @@ MIT, see [LICENSE](LICENSE).
 Seenboard was called focusdeck before 0.5.0. It reads nothing under the old name: no `focusdeck` directory, no `FOCUSDECK_*` variable. Protocol 2 also replaces protocol 1, so plugins must be installed again.
 
 ```sh
-mv ~/.config/focusdeck ~/.config/seenboard
-mv ~/.local/share/focusdeck ~/.local/share/seenboard
-mv ~/.local/state/focusdeck ~/.local/state/seenboard
+mv -T ~/.config/focusdeck ~/.config/seenboard
+mv -T ~/.local/share/focusdeck ~/.local/share/seenboard
+mv -T ~/.local/state/focusdeck ~/.local/state/seenboard
 ```
 
-Then fix the paths inside profiles and `config.toml`: `token_file` and `key_file` entries that point into `~/.config/focusdeck/secrets/` now point into `~/.config/seenboard/secrets/`. Rename the `FOCUSDECK_*` variables in your shell, timer and window manager setup to `SEENBOARD_*`. Install each plugin again with `seenboard plugin install <name>`.
+Run these before the first `seenboard` start, otherwise it creates empty directories under the new name. Then fix the paths inside profiles and `config.toml`: `token_file` and `key_file` entries that point into `~/.config/focusdeck/secrets/` now point into `~/.config/seenboard/secrets/`. Rename the `FOCUSDECK_*` variables in your shell, timer and window manager setup to `SEENBOARD_*`. Install each plugin again with `seenboard plugin install <name>`.
