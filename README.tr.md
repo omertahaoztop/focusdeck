@@ -16,6 +16,20 @@ Görüntülerdeki veriler uydurmadır.
 
 ## Kurulum
 
+Hazır binary'yi (Linux x86_64 ya da aarch64, glibc 2.39 veya daha yeni) ve sağlama dosyasını [son release](https://github.com/omertahaoztop/seenboard/releases/latest) sayfasından indir:
+
+```sh
+tag=v0.5.0
+triple=x86_64-unknown-linux-gnu   # ya da aarch64-unknown-linux-gnu
+curl -fLO "https://github.com/omertahaoztop/seenboard/releases/download/$tag/seenboard-$triple"
+curl -fLO "https://github.com/omertahaoztop/seenboard/releases/download/$tag/seenboard-$triple.sha256"
+sha256sum -c "seenboard-$triple.sha256"
+gh attestation verify "seenboard-$triple" --repo omertahaoztop/seenboard   # isteğe bağlı
+install -Dm 0755 "seenboard-$triple" ~/.local/bin/seenboard
+```
+
+Kaynaktan derlemek istersen:
+
 ```sh
 cargo install --git https://github.com/omertahaoztop/seenboard --tag v0.5.0 --locked seenboard
 ```
