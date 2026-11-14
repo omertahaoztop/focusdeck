@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use focusdeck_protocol::{
+use seenboard_protocol::{
     ActionParams, Describe, DropParams, Item, ListParams, PROTOCOL_VERSION, Plugin, Reminder,
     RemindersParams, serve,
 };
@@ -99,7 +99,7 @@ impl Plugin for Fake {
             name: "fake".into(),
             version: "0.1.0".into(),
             protocol: if mode() == "oldproto" {
-                0
+                1
             } else {
                 PROTOCOL_VERSION
             },
@@ -215,7 +215,7 @@ impl Plugin for Fake {
 
 fn main() -> io::Result<()> {
     if let Ok(path) = std::env::var("FAKE_LANG_LOG") {
-        let lang = std::env::var("FOCUSDECK_LANG").unwrap_or_else(|_| "-".into());
+        let lang = std::env::var("SEENBOARD_LANG").unwrap_or_else(|_| "-".into());
         std::fs::write(path, lang)?;
     }
     if let Ok(path) = std::env::var("FAKE_START_LOG") {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fake focusdeck plugin that serves made-up items for README screenshots."""
+"""Fake seenboard plugin that serves made-up items for README screenshots."""
 import json
 import os
 import sys
@@ -87,7 +87,7 @@ SETS = {
     },
 }
 
-lang = "tr" if os.environ.get("FOCUSDECK_LANG", "").lower().startswith("tr") else "en"
+lang = "tr" if os.environ.get("SEENBOARD_LANG", "").lower().startswith("tr") else "en"
 data = SETS[lang]
 box = "today"
 

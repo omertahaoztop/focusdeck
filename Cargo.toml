@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/fake-plugin", "crates/focusdeck", "crates/focusdeck-i18n", "crates/focusdeck-protocol"]
+members = ["crates/fake-plugin", "crates/seenboard", "crates/seenboard-i18n", "crates/seenboard-protocol"]
 
 [workspace.package]
 edition = "2024"

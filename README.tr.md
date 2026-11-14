@@ -1,4 +1,4 @@
-# focusdeck
+# Seenboard
 
 [English](README.md) · **Türkçe**
 
@@ -17,44 +17,44 @@ Görüntülerdeki veriler uydurmadır.
 ## Kurulum
 
 ```sh
-cargo install --git https://github.com/omertahaoztop/focusdeck --tag v0.4.0 --locked focusdeck
+cargo install --git https://github.com/omertahaoztop/seenboard --tag v0.5.0 --locked seenboard
 ```
 
-Hazır plugin'ler [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) reposunda. Dizinden kurulur:
+Hazır plugin'ler [seenboard-plugins](https://github.com/omertahaoztop/seenboard-plugins) reposunda. Dizinden kurulur:
 
 ```sh
-focusdeck plugin install vikunja
-focusdeck plugin list
-focusdeck plugin remove vikunja
+seenboard plugin install vikunja
+seenboard plugin list
+seenboard plugin remove vikunja
 ```
 
-`focusdeck plugin list` çıktısı:
+`seenboard plugin list` çıktısı:
 
 ```
 vikunja  0.2.0  (dizinde: 0.2.0)
 local  (yerleşik)
 ```
 
-`local` focusdeck'in içinde gelir ve listenin sonunda hep yer alır. `plugin install local` ile `plugin remove local` reddedilir.
+`local` Seenboard'un içinde gelir ve listenin sonunda hep yer alır. `plugin install local` ile `plugin remove local` reddedilir.
 
-Plugin'ler `~/.local/share/focusdeck/plugins/<ad>` altına yazılır. `install` dizinden indirdiği dosyanın sha256'sını doğrular, tutmazsa dosyayı siler. Yarıda kalan bir yeniden kurulum önceki sürümü yerinde bırakır. `remove` plugin'i hâlâ kullanan bir profil varsa uyarır.
+Plugin'ler `~/.local/share/seenboard/plugins/<ad>` altına yazılır. `install` dizinden indirdiği dosyanın sha256'sını doğrular, tutmazsa dosyayı siler. Yarıda kalan bir yeniden kurulum önceki sürümü yerinde bırakır. `remove` plugin'i hâlâ kullanan bir profil varsa uyarır.
 
 > Plugin'ler kullanıcının yetkisiyle çalışır, kum havuzu yoktur. Bir plugin'i kurmadan önce kaynağına güvendiğinden emin ol.
 
 ## Hızlı başlangıç
 
-`cargo install` sonrası `focusdeck` çalıştır. Profil seçilmemişse (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`) ve `~/.config/focusdeck/profiles/` boşsa focusdeck `profiles/notes.toml` dosyasını tek kutuyla ("Notlar" başlıklı, arayüz dilinde) oluşturup açar. `a` tuşuna basıp bir satır yazmak not almaya yeter. `config.toml` yazılmaz.
+`cargo install` sonrası `seenboard` çalıştır. Profil seçilmemişse (`--profile`, `SEENBOARD_PROFILE`, `default_profile`) ve `~/.config/seenboard/profiles/` boşsa Seenboard `profiles/notes.toml` dosyasını tek kutuyla ("Notlar" başlıklı, arayüz dilinde) oluşturup açar. `a` tuşuna basıp bir satır yazmak not almaya yeter. `config.toml` yazılmaz.
 
-`profiles/` içinde tek profil varsa focusdeck sormadan onu açar. Birden çok profil var ve seçim yapılmamışsa hata verip çıkar. [Profil](#profil) bölümündeki gibi birini seç.
+`profiles/` içinde tek profil varsa Seenboard sormadan onu açar. Birden çok profil var ve seçim yapılmamışsa hata verip çıkar. [Profil](#profil) bölümündeki gibi birini seç.
 
 ## Ayarlar
 
-`~/.config/focusdeck/config.toml`, hepsi isteğe bağlı:
+`~/.config/seenboard/config.toml`, hepsi isteğe bağlı:
 
 ```toml
 language = "tr"
 default_profile = "ev"
-registries = ["https://raw.githubusercontent.com/omertahaoztop/focusdeck-plugins/main/index.toml"]
+registries = ["https://raw.githubusercontent.com/omertahaoztop/seenboard-plugins/main/index.toml"]
 capture_command = ["rofi", "-dmenu", "-p", "Not"]
 
 [capture_words]
@@ -65,15 +65,15 @@ minute = ["dak"]
 - `language`: arayüz dili, `en` ya da `tr` gibi bir kod (bkz. [Çeviri](#çeviri)). Yoksa çekirdek sırayla `LC_ALL`, `LC_MESSAGES` ve `LANG` değişkenlerine bakar, hiçbiri yoksa İngilizceye düşer. Cron, systemd timer ya da pencere yöneticisi kısayolu `LANG` taşımayabilir; `capture` ya da `remind` bunlardan çalışıyorsa `language` yaz.
 - `capture_words`: `capture` komutunun anladığı kelimelere ek yazımlar; etkin dilin kendi kelimelerine eklenir. Her anahtar bir liste alır; anahtarlar `tomorrow`, `minute`, `hour`, `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun`, bilinmeyen anahtar hatadır.
 - `config.toml` içindeki bilinmeyen her anahtar hatadır, yazım yanlışı sessizce geçmez.
-- `default_profile`: `--profile` ve `FOCUSDECK_PROFILE` verilmediğinde kullanılan profil.
+- `default_profile`: `--profile` ve `SEENBOARD_PROFILE` verilmediğinde kullanılan profil.
 - `registries`: plugin dizini adresleri, sırayla. Aynı ad iki dizinde varsa öndeki kazanır. Kendi dizinini ya da fork'unu buraya ekleyebilirsin.
 - `capture_command`: `capture` metinsiz çağrılınca tek satır sormak için çalıştırılan komut.
-- `[serve]`: `focusdeck server` için `listen` ve `token_file` (bkz. [Sunucu](#sunucu)).
+- `[serve]`: `seenboard server` için `listen` ve `token_file` (bkz. [Sunucu](#sunucu)).
 - `[server]`: yerel profiller yerine sunucuyu kullanmak için `url` ve `token_file` (bkz. [Sunucu](#sunucu)).
 
 ## Profil
 
-`~/.config/focusdeck/profiles/<ad>.toml`. Profil seçimi sırasıyla `--profile`, `FOCUSDECK_PROFILE`, `default_profile`.
+`~/.config/seenboard/profiles/<ad>.toml`. Profil seçimi sırasıyla `--profile`, `SEENBOARD_PROFILE`, `default_profile`.
 
 ```toml
 name = "ev"
@@ -88,7 +88,7 @@ plugin = "vikunja"
 row = 0
 col = 0
 refresh = "1m"
-config = { url = "https://vikunja.example.com", token_file = "~/.config/focusdeck/secrets/vikunja", project = "Ev" }
+config = { url = "https://vikunja.example.com", token_file = "~/.config/seenboard/secrets/vikunja", project = "Ev" }
 
 [[box]]
 id = "redmine"
@@ -97,7 +97,7 @@ plugin = "redmine"
 row = 0
 col = 1
 plan_into = "sozlu"
-config = { url = "https://redmine.example.com", key_file = "~/.config/focusdeck/secrets/redmine" }
+config = { url = "https://redmine.example.com", key_file = "~/.config/seenboard/secrets/redmine" }
 ```
 
 - `row` ve `col` ızgara konumudur. İsteğe bağlı `width` ve `height` kutuyu birden çok hücreye yayar.
@@ -122,10 +122,10 @@ config = { list = "fikirler" }
 
 - `list` not listesinin adıdır; yazılmazsa kutunun `id` değeri kullanılır. Aynı `list` adını kullanan kutular, hangi profilde olurlarsa olsunlar, aynı notları görür.
 - `x` notu bitti sayar. Notlar taşınabilir (`m` ya da sürükleme) ve sıralanabilir, kutu başka kutulardan bırakılanları da kabul eder: Zulip mesajı, mail ya da Redmine işi not olur.
-- Son tarihi olan not, saati geldiğinde `focusdeck remind` ile hatırlatma olarak gösterilir.
+- Son tarihi olan not, saati geldiğinde `seenboard remind` ile hatırlatma olarak gösterilir.
 - Yerel kutu bir Redmine kutusunun `plan_into` hedefi olabilir.
 
-Notlar `~/.local/share/focusdeck/local.json` dosyasında durur, `FOCUSDECK_DATA_DIR` tanımlıysa `$FOCUSDECK_DATA_DIR/local.json` dosyasında. Yedek için bu dosyayı kopyalamak yeter. Bitmiş notlar dosyada kalır ama kutuda görünmez.
+Notlar `~/.local/share/seenboard/local.json` dosyasında durur, `SEENBOARD_DATA_DIR` tanımlıysa `$SEENBOARD_DATA_DIR/local.json` dosyasında. Yedek için bu dosyayı kopyalamak yeter. Bitmiş notlar dosyada kalır ama kutuda görünmez.
 
 ## Ekran ve tuşlar
 
@@ -149,7 +149,7 @@ Ana ekranda profildeki kutular ızgarada durur. Kutu başlığı öğe sayısın
 
 Not ya da arama alanına yapıştırılan metin tek satır olarak gelir, satır sonları boşluğa döner. Başka bir ekranda yapıştırılan metin yok sayılır, yani tuş olarak çalışmaz. Bunun için terminalin bracketed paste desteklemesi gerekir, güncel terminaller destekler.
 
-`NO_COLOR` boş olmayan bir değerle tanımlıysa focusdeck renk kullanmaz: seçim ters video ile gösterilir, gecikmiş öğeler `!` işaretini korur.
+`NO_COLOR` boş olmayan bir değerle tanımlıysa Seenboard renk kullanmaz: seçim ters video ile gösterilir, gecikmiş öğeler `!` işaretini korur.
 
 Fare:
 
@@ -161,11 +161,11 @@ Fare:
 ## Dışarıdan not alma
 
 ```sh
-focusdeck capture "R12345 arandı #tel yarın 14:00 // ayrıntı"
-focusdeck capture
+seenboard capture "R12345 arandı #tel yarın 14:00 // ayrıntı"
+seenboard capture
 ```
 
-Metin verilmezse `capture_command` tek satır sorar. Not profildeki `capture_into` kutusuna gider; başlık boşsa ya da plugin'e ulaşılamıyorsa komut 1 ile çıkar. Ulaşılamayan not `~/.local/state/focusdeck/capture-queue.jsonl` dosyasında bekler ve sonraki başarılı yakalamada gönderilir. Not gönderim başlamadan önce bu dosyaya yazıldığından öldürülen ya da kesilen bir `capture` notu kaybetmez. Teslim en az bir kezdir: öldürülen bir çalıştırmadan sonra not plugin'e iki kez ulaşabilir. Bir pencere yöneticisi kısayoluna (örneğin Hyprland'de `F9`) bağlamak için `focusdeck capture` yeterlidir.
+Metin verilmezse `capture_command` tek satır sorar. Not profildeki `capture_into` kutusuna gider; başlık boşsa ya da plugin'e ulaşılamıyorsa komut 1 ile çıkar. Ulaşılamayan not `~/.local/state/seenboard/capture-queue.jsonl` dosyasında bekler ve sonraki başarılı yakalamada gönderilir. Not gönderim başlamadan önce bu dosyaya yazıldığından öldürülen ya da kesilen bir `capture` notu kaybetmez. Teslim en az bir kezdir: öldürülen bir çalıştırmadan sonra not plugin'e iki kez ulaşabilir. Bir pencere yöneticisi kısayoluna (örneğin Hyprland'de `F9`) bağlamak için `seenboard capture` yeterlidir.
 
 Yazım kuralları:
 
@@ -182,27 +182,27 @@ Kelimeler arayüz diline bağlıdır, büyük küçük harf ayırmaz ve `capture
 | `en` | `tomorrow` | `min`, `m` | `h` | `mon`/`monday`, `tue`/`tuesday`, `wed`/`wednesday`, `thu`/`thursday`, `fri`/`friday`, `sat`/`saturday`, `sun`/`sunday` |
 | `tr` | `yarın`, `yarin` | `dk` | `s` | `pzt`/`pts`, `sal`, `çar`/`car`, `per`/`prş`/`prs`, `cum`, `cmt`, `paz` |
 
-Örneğin Türkçe `focusdeck capture "R12345 arandı #tel yarın 14:00"`, İngilizce `focusdeck capture "R12345 called #tel tomorrow 14:00"`.
+Örneğin Türkçe `seenboard capture "R12345 arandı #tel yarın 14:00"`, İngilizce `seenboard capture "R12345 called #tel tomorrow 14:00"`.
 
 ## Hatırlatma
 
 ```sh
-focusdeck remind
-focusdeck remind --send
+seenboard remind
+seenboard remind --send
 ```
 
-Hatırlatma destekleyen plugin'lerden son 12 saatin hatırlatmalarını ister. `remind` saati gelenleri yazdırır; `--send` bunları `notify-send -u critical` ile bildirim olarak gösterir. Gösterilenler `~/.local/state/focusdeck/reminded.json` dosyasına yazılır, aynı hatırlatma bir daha gösterilmez. Dakikada bir çalışan bir systemd timer ya da cron girdisi `focusdeck remind --send` çalıştırabilir.
+Hatırlatma destekleyen plugin'lerden son 12 saatin hatırlatmalarını ister. `remind` saati gelenleri yazdırır; `--send` bunları `notify-send -u critical` ile bildirim olarak gösterir. Gösterilenler `~/.local/state/seenboard/reminded.json` dosyasına yazılır, aynı hatırlatma bir daha gösterilmez. Dakikada bir çalışan bir systemd timer ya da cron girdisi `seenboard remind --send` çalıştırabilir.
 
 ## Sunucu
 
-`focusdeck server` kutuları tek makinede çalıştırır, öteki makineler ve uygulamalar bunlara HTTPS ile erişir. Profiller, plugin'ler, şifreleri ve `local.json` sunucuda durur. İstemci bunların hiçbirine sahip olmadan aynı kutuları gösterir.
+`seenboard server` kutuları tek makinede çalıştırır, öteki makineler ve uygulamalar bunlara HTTPS ile erişir. Profiller, plugin'ler, şifreleri ve `local.json` sunucuda durur. İstemci bunların hiçbirine sahip olmadan aynı kutuları gösterir.
 
 Sunucu tarafında `config.toml`:
 
 ```toml
 [serve]
 listen = "127.0.0.1:8740"
-token_file = "~/.config/focusdeck/secrets/server-token"
+token_file = "~/.config/seenboard/secrets/server-token"
 ```
 
 - `listen`: dinlenecek adres. Varsayılan `127.0.0.1:8740` olduğundan önüne bir vekil sunucu koymadıkça ya da başka bir adres seçmedikçe sunucuya dışarıdan erişilmez.
@@ -211,14 +211,14 @@ token_file = "~/.config/focusdeck/secrets/server-token"
 Token'ı bir kez üret, aynı dosyayı her istemciye kopyala:
 
 ```sh
-install -D -m 600 /dev/null ~/.config/focusdeck/secrets/server-token
-openssl rand -hex 32 > ~/.config/focusdeck/secrets/server-token
+install -D -m 600 /dev/null ~/.config/seenboard/secrets/server-token
+openssl rand -hex 32 > ~/.config/seenboard/secrets/server-token
 ```
 
-Sonra `focusdeck server` çalıştır. Sunucu TLS konuşmaz, bunu Caddy gibi bir ters vekil üstlenir:
+Sonra `seenboard server` çalıştır. Sunucu TLS konuşmaz, bunu Caddy gibi bir ters vekil üstlenir:
 
 ```
-deck.example.com {
+seenboard.example.com {
     reverse_proxy 127.0.0.1:8740
 }
 ```
@@ -227,19 +227,19 @@ deck.example.com {
 
 ```toml
 [server]
-url = "https://deck.example.com"
-token_file = "~/.config/focusdeck/secrets/server-token"
+url = "https://seenboard.example.com"
+token_file = "~/.config/seenboard/secrets/server-token"
 ```
 
 - `url` `https://` olmalı. Düz `http://` yalnız deneme için `127.0.0.1`, `[::1]` ve `localhost` adreslerinde kabul edilir.
 - `token_file` sunucudaki kurallara uyar.
 - Her istek 20 saniyede zaman aşımına uğrar.
 
-`[server]` bölümü varsa TUI, `capture` ve `remind` sunucuyla konuşur. Profil her zamanki gibi seçilir (`--profile`, `FOCUSDECK_PROFILE`, `default_profile`), hiçbiri verilmemişse istemci sunucunun varsayılan profilini ya da tek profilini alır. Sunucudan profil (kutular, yerleşim, `capture_into`, `capture_refs`, `capture_label_aliases`, `capture_words`), her kutunun öğeleri ve her eylemin, bırakmanın ve yakalamanın sonucu gelir. Yerel `[capture_words]` istemci kipinde yok sayılır. `plan_into` bağlantısı yalnız sunucuda çalışır ve bağlı görevleri orada kapatır, böylece iki istemci aynı görevi iki kez bitirmez. Hatırlatmalar sunucudan alınır, hangilerinin gösterildiği ise makine başına kendi `reminded.json` dosyasında tutulur. `[server]` varken yerel `profiles/`, kurulu plugin'ler ve `local.json` kullanılmaz.
+`[server]` bölümü varsa TUI, `capture` ve `remind` sunucuyla konuşur. Profil her zamanki gibi seçilir (`--profile`, `SEENBOARD_PROFILE`, `default_profile`), hiçbiri verilmemişse istemci sunucunun varsayılan profilini ya da tek profilini alır. Sunucudan profil (kutular, yerleşim, `capture_into`, `capture_refs`, `capture_label_aliases`, `capture_words`), her kutunun öğeleri ve her eylemin, bırakmanın ve yakalamanın sonucu gelir. Yerel `[capture_words]` istemci kipinde yok sayılır. `plan_into` bağlantısı yalnız sunucuda çalışır ve bağlı görevleri orada kapatır, böylece iki istemci aynı görevi iki kez bitirmez. Hatırlatmalar sunucudan alınır, hangilerinin gösterildiği ise makine başına kendi `reminded.json` dosyasında tutulur. `[server]` varken yerel `profiles/`, kurulu plugin'ler ve `local.json` kullanılmaz.
 
 `capture` notu önce kendi kuyruğuna yazar. Sunucuya ulaşılamazsa not orada bekleyip sonraki başarılı yakalamada gider. Not kuyruktan yalnız sunucu `INVALID` cevabı verirse kalıcı olarak çıkar. Seçili profilde `capture_into` yoksa not kuyrukta kalır, nedeni de ekrana bildirilir.
 
-`[server]` bölümü yoksa focusdeck eskisi gibi yerelde çalışır.
+`[server]` bölümü yoksa Seenboard eskisi gibi yerelde çalışır.
 
 API bir kutunun `config` tablosunu ve gizli dosyalarının yollarını hiç döndürmez. Plugin hata metni değiştirilmeden iletilir. Token da log'a ya da hata metnine yazılmaz.
 
@@ -294,33 +294,33 @@ Plugin, çekirdeğin her kutu için bir kez başlatıp açık tuttuğu bir progr
 - İstek başına zaman aşımı 15 saniyedir. Zaman aşımı, JSON olmayan satır, 16 MiB'tan uzun satır ya da süreç çökmesi kutuda kırmızı bir satır olarak görünür; çekirdek plugin'i bir sonraki yenilemede yeniden başlatır, öteki kutular etkilenmez.
 - `describe` cevabındaki `protocol` çekirdeğin bildiği sürümden farklıysa kutu açılmaz.
 - Çekirdek yalnız `*_file` yolunu ve izinlerini denetler; şifreyi plugin dosyadan kendisi okur, değer çekirdekten geçmez.
-- Çekirdek her plugin'i istenen arayüz dilini `FOCUSDECK_LANG` ortam değişkeninde (örneğin `tr`) vererek başlatır, dil yoksa değişkeni kaldırır. Plugin'in o dilde çevirisi yoksa İngilizce kullanılır.
+- Çekirdek her plugin'i istenen arayüz dilini `SEENBOARD_LANG` ortam değişkeninde (örneğin `tr`) vererek başlatır, dil yoksa değişkeni kaldırır. Plugin'in o dilde çevirisi yoksa İngilizce kullanılır.
 - Plugin herhangi bir dille yazılabilir, tek şart protokole uymak.
 
-Rust ile plugin yazanlar için tipler ve `Plugin` trait'iyle satır döngüsünü yürüten `serve` yardımcısı `focusdeck-protocol` crate'inde durur:
+Rust ile plugin yazanlar için tipler ve `Plugin` trait'iyle satır döngüsünü yürüten `serve` yardımcısı `seenboard-protocol` crate'inde durur:
 
 ```toml
 [dependencies]
-focusdeck-protocol = { git = "https://github.com/omertahaoztop/focusdeck", tag = "v0.2.0" }
+seenboard-protocol = { git = "https://github.com/omertahaoztop/seenboard", tag = "v0.5.0" }
 ```
 
-`Plugin` trait'ini uygulayıp `focusdeck_protocol::serve(plugin, stdin.lock(), stdout)` çağırmak yeter.
+`Plugin` trait'ini uygulayıp `seenboard_protocol::serve(plugin, stdin.lock(), stdout)` çağırmak yeter.
 
 ## Güvenlik ve gizlilik
 
 - Plugin dizinleri ve plugin dosyaları HTTPS üzerinden indirilir. Düz `http://` reddedilir, yönlendirme hedefi olarak da. İstisna, dizini yerelde denemek için `127.0.0.1`, `[::1]` ve `localhost` adresleridir. Ağdan indirilen bir dizin plugin'i yerel bir dosyaya ya da bu adreslere yönlendiremez.
-- `plugin install` binary'nin sha256'sını yanındaki manifest dosyasına yazar. Bir kutu o plugin'i başlatmadan önce focusdeck binary'yi manifest ile karşılaştırır, değişmiş bir binary'yi başlatmayıp hata gösterir. Elle kopyalanan plugin'in manifest'i olmadığından denetlenmez.
+- `plugin install` binary'nin sha256'sını yanındaki manifest dosyasına yazar. Bir kutu o plugin'i başlatmadan önce Seenboard binary'yi manifest ile karşılaştırır, değişmiş bir binary'yi başlatmayıp hata gösterir. Elle kopyalanan plugin'in manifest'i olmadığından denetlenmez.
 - Log, yakalama kuyruğu, hatırlatma kaydı ve `local.json` yalnız sahibinin okuyup yazabileceği şekilde (0600) oluşturulur.
-- `~/.local/state/focusdeck/focusdeck.log` 1 MiB'ı geçince `focusdeck.log.1` adına taşınır, yani en çok 2 MiB kadar yer tutar.
+- `~/.local/state/seenboard/seenboard.log` 1 MiB'ı geçince `seenboard.log.1` adına taşınır, yani en çok 2 MiB kadar yer tutar.
 
 ## Çeviri
 
-Bir dil tek dosyadır: [Fluent](https://projectfluent.org/) söz diziminde `crates/focusdeck/locales/<kod>.ftl` ekle (örneğin `de.ftl`) ve yeniden derle; dosya adı, `language` ve `LANG` değerinin eşleştiği koddur.
+Bir dil tek dosyadır: [Fluent](https://projectfluent.org/) söz diziminde `crates/seenboard/locales/<kod>.ftl` ekle (örneğin `de.ftl`) ve yeniden derle; dosya adı, `language` ve `LANG` değerinin eşleştiği koddur.
 
 - Temel `en.ftl` dosyasıdır. Kopyala, değerleri çevir; mesaj kimlikleri ve `{ $değişken }` adları olduğu gibi kalır.
 - `cargo test`, eksik ya da fazla kimlikleri ve `en.ftl`'den farklı değişkenleri söyleyerek düşer; yarım bir çeviri içeri giremez.
 - `capture-words-*` girdileri cümle değil, boşlukla ayrılmış yazım listesidir: `capture-words-tomorrow`, `capture-words-minute`, `capture-words-hour` ve `capture-words-mon` ile `capture-words-sun` arası. İnsanların gerçekten yazdığı biçimleri koy; klavye düzeni yüzünden aksansız yazım olası ise onu da ekle.
-- Bir plugin'in yazdığı metinler burada değil, [focusdeck-plugins](https://github.com/omertahaoztop/focusdeck-plugins) reposunda çevrilir.
+- Bir plugin'in yazdığı metinler burada değil, [seenboard-plugins](https://github.com/omertahaoztop/seenboard-plugins) reposunda çevrilir.
 
 ## Geliştirme
 
@@ -332,3 +332,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## Lisans
 
 MIT, bkz. [LICENSE](LICENSE).
+
+## focusdeck'ten geçiş
+
+Seenboard, 0.5.0 öncesinde focusdeck adını taşıyordu. Eski ad altında hiçbir şey okunmaz: `focusdeck` dizini de `FOCUSDECK_*` değişkenleri de yok sayılır. Protokol 2, protokol 1'in yerini aldığından plugin'ler yeniden kurulmalıdır.
+
+```sh
+mv ~/.config/focusdeck ~/.config/seenboard
+mv ~/.local/share/focusdeck ~/.local/share/seenboard
+mv ~/.local/state/focusdeck ~/.local/state/seenboard
+```
+
+Sonra profillerdeki ve `config.toml` içindeki yolları düzelt: `~/.config/focusdeck/secrets/` altını gösteren `token_file` ve `key_file` girdileri artık `~/.config/seenboard/secrets/` altını gösterir. Kabuğundaki, timer'daki ve pencere yöneticisi ayarındaki `FOCUSDECK_*` değişkenlerini `SEENBOARD_*` yap. Her plugin'i `seenboard plugin install <ad>` ile yeniden kur.

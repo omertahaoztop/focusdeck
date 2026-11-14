@@ -7,5 +7,5 @@ license.workspace = true
 publish = false
 
 [dependencies]
-focusdeck-protocol = { path = "../focusdeck-protocol" }
+seenboard-protocol = { path = "../seenboard-protocol" }
 serde_json.workspace = true
